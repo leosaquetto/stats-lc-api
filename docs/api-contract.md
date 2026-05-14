@@ -8,7 +8,7 @@ Represents the **primary platform of the user** in this app context.
 - Source: profile/service/import/settings signals, with optional manual fallback.
 - Shape: `{ primary, confidence, source, sourceKey, rawValue }`.
 
-### `nowPlaying.platform`
+### `nowPlaying.platformCandidate`
 Represents the **platform candidate from the stream item**, when available.
 
 - It is item-level context (what the stream payload suggests), not the user's global primary platform.
