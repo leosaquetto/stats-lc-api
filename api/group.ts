@@ -1,7 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../lib/users.js";
 import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
-import { normalizeRecentItem, normalizeTopItem } from "../lib/normalize.js";
+import {
+  extractServiceCandidate,
+  normalizeRecentItem,
+  normalizeTopItem,
+} from "../lib/normalize.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -9,6 +13,27 @@ import {
   TIMEZONE_SP,
 } from "../lib/time.js";
 
+
+
+const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
+
+function sanitizeDebugValue(value: any): any {
+  if (Array.isArray(value)) return value.map(sanitizeDebugValue);
+
+  if (value && typeof value === "object") {
+    return Object.entries(value).reduce((acc, [key, entry]) => {
+      if (SENSITIVE_KEY_PATTERN.test(key)) {
+        acc[key] = "[REDACTED]";
+        return acc;
+      }
+
+      acc[key] = sanitizeDebugValue(entry);
+      return acc;
+    }, {} as Record<string, any>);
+  }
+
+  return value;
+}
 
 function getDisplayName(profileData: any, fallback: string) {
   return (
@@ -25,7 +50,8 @@ async function getUserBundle(
   force: boolean,
   afterToday: number,
   afterWeek: number,
-  afterMonth: number
+  afterMonth: number,
+  debug: boolean
 ) {
   const [
     profile,
@@ -57,6 +83,19 @@ async function getUserBundle(
   const albumsData: any = topAlbums.data;
 
   const displayName = getDisplayName(profileData, key);
+  const profileRaw = profileData?.item ?? null;
+  const recentItemRaw = recentData?.items?.[0] ?? null;
+
+  const debugData = debug
+    ? {
+        profileRawKeys: Object.keys(profileRaw || {}),
+        recentItemRawKeys: Object.keys(recentItemRaw || {}),
+        profileServiceCandidate: sanitizeDebugValue(extractServiceCandidate(profileRaw)),
+        recentItemServiceCandidate: sanitizeDebugValue(extractServiceCandidate(recentItemRaw)),
+        profileRaw: sanitizeDebugValue(profileRaw),
+        recentItemRaw: sanitizeDebugValue(recentItemRaw),
+      }
+    : null;
 
   return {
     key,
@@ -107,6 +146,8 @@ async function getUserBundle(
         : [],
     },
 
+    ...(debugData ? { debug: debugData } : {}),
+
     errors: {
       profile: profile.ok ? null : profile,
       recent: recent.ok ? null : recent,
@@ -122,6 +163,7 @@ async function getUserBundle(
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const force = req.query.force === "1";
+  const debug = req.query.debug === "1";
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string }]>;
 
   const afterToday = getStartOfTodaySPMs();
@@ -130,7 +172,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const settled = await Promise.allSettled(
     users.map(([key, user]) =>
-      getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth)
+      getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug)
     )
   );
 
@@ -194,7 +236,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }));
 
   const generatedAt = new Date().toISOString();
-  const debug = req.query.debug === "1";
 
   res.status(200).json({
     ok: true,
