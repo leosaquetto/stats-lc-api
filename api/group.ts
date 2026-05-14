@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../lib/users.js";
 import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
+import { buildRanking } from "../lib/analytics/rankings.js";
+import { normalizeProfile } from "../lib/normalizers/profile.js";
+import type { GroupMember } from "../lib/types.js";
 import { normalizeRecentItem, normalizeTopItem } from "../lib/normalize.js";
 
 function startOfTodayMs() {
@@ -18,14 +21,6 @@ function startOfMonthMs() {
   return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 }
 
-function getDisplayName(profileData: any, fallback: string) {
-  return (
-    profileData?.item?.displayName ??
-    profileData?.item?.username ??
-    profileData?.item?.name ??
-    fallback
-  );
-}
 
 async function getUserBundle(key: string, user: { id: string }, force: boolean) {
   const afterToday = startOfTodayMs();
@@ -33,7 +28,7 @@ async function getUserBundle(key: string, user: { id: string }, force: boolean) 
   const afterMonth = startOfMonthMs();
 
   const [
-    profile,
+    profile: normalizedProfile,
     recent,
     todayStats,
     weekStats,
@@ -61,17 +56,13 @@ async function getUserBundle(key: string, user: { id: string }, force: boolean) 
   const tracksData: any = topTracks.data;
   const albumsData: any = topAlbums.data;
 
-  const displayName = getDisplayName(profileData, key);
+  const normalizedProfile = normalizeProfile(profileData, key);
 
   return {
     key,
     id: user.id,
 
-    profile: {
-      displayName,
-      username: profileData?.item?.username ?? null,
-      image: profileData?.item?.image ?? null,
-    },
+    profile: normalizedProfile,
 
     nowPlaying:
       Array.isArray(recentData?.items) && recentData.items[0]
@@ -150,47 +141,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
   });
 
-  const rankingWeek = [...members]
-    .sort(
-      (a: any, b: any) =>
-        (b?.stats?.week?.streams ?? 0) - (a?.stats?.week?.streams ?? 0)
-    )
-    .map((member: any, index) => ({
-      position: index + 1,
-      key: member.key,
-      id: member.id,
-      displayName: member.profile?.displayName ?? member.key,
-      image: member.profile?.image ?? null,
-      streams: member.stats?.week?.streams ?? 0,
-    }));
-
-  const rankingMonth = [...members]
-    .sort(
-      (a: any, b: any) =>
-        (b?.stats?.month?.streams ?? 0) - (a?.stats?.month?.streams ?? 0)
-    )
-    .map((member: any, index) => ({
-      position: index + 1,
-      key: member.key,
-      id: member.id,
-      displayName: member.profile?.displayName ?? member.key,
-      image: member.profile?.image ?? null,
-      streams: member.stats?.month?.streams ?? 0,
-    }));
-
-  const rankingToday = [...members]
-    .sort(
-      (a: any, b: any) =>
-        (b?.stats?.today?.streams ?? 0) - (a?.stats?.today?.streams ?? 0)
-    )
-    .map((member: any, index) => ({
-      position: index + 1,
-      key: member.key,
-      id: member.id,
-      displayName: member.profile?.displayName ?? member.key,
-      image: member.profile?.image ?? null,
-      streams: member.stats?.today?.streams ?? 0,
-    }));
+  const rankingToday = buildRanking(members as GroupMember[], "today");
+  const rankingWeek = buildRanking(members as GroupMember[], "week");
+  const rankingMonth = buildRanking(members as GroupMember[], "month");
 
   res.status(200).json({
     ok: true,
