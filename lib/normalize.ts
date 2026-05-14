@@ -14,6 +14,73 @@ const SERVICE_CANDIDATE_KEYS = [
   "integrations"
 ] as const;
 
+export function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+export function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+export function asArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+export function pickFirstNonEmpty(...values: unknown[]) {
+  for (const value of values) {
+    if (value == null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    return value;
+  }
+  return null;
+}
+
+export function normalizeDurationMs(value: unknown): number | null {
+  return asNumber(value);
+}
+
+export function normalizePlayedMs(value: unknown): number | null {
+  return asNumber(value);
+}
+
+export function normalizeExternalIds(entity: any) {
+  const externalIds = entity?.externalIds ?? {};
+
+  const spotify = asArray(externalIds?.spotify)
+    .map((value) => asString(value))
+    .filter(Boolean) as string[];
+
+  const appleMusic = asArray(externalIds?.appleMusic)
+    .map((value) => asString(value))
+    .filter(Boolean) as string[];
+
+  const musicBrainz = asArray(externalIds?.musicBrainz)
+    .map((value) => asString(value))
+    .filter(Boolean) as string[];
+
+  const isrc = asArray(externalIds?.isrc)
+    .map((value) => asString(value))
+    .filter(Boolean) as string[];
+
+  return {
+    spotify,
+    appleMusic,
+    musicBrainz,
+    isrc,
+    raw: externalIds
+  };
+}
+
+export function normalizeImage(entity: any): string | null {
+  return asString(entity?.image);
+}
+
 function normalizeServicePlatform(value: unknown): ServicePlatform {
   if (typeof value !== "string") return "unknown";
 
@@ -88,27 +155,47 @@ export function extractServiceCandidate(obj: any) {
 
 export function normalizeTrack(track: any) {
   const album = track?.albums?.[0] || track?.album || null;
+  const trackExternalIds = normalizeExternalIds(track);
 
   return {
     id: track?.id ?? null,
     name: track?.name ?? null,
     artists: Array.isArray(track?.artists)
-      ? track.artists.map((artist: any) => ({
-          id: artist?.id ?? null,
-          name: artist?.name ?? null
-        }))
+      ? track.artists.map((artist: any) => {
+          const artistExternalIds = normalizeExternalIds(artist);
+          return {
+            id: artist?.id ?? null,
+            name: artist?.name ?? null,
+            externalIds: artistExternalIds,
+            spotifyId: pickFirstNonEmpty(artist?.spotifyId, artistExternalIds.spotify[0]),
+            appleMusicId: pickFirstNonEmpty(
+              artist?.appleMusicId,
+              artistExternalIds.appleMusic[0]
+            )
+          };
+        })
       : [],
     album: album
-      ? {
-          id: album?.id ?? null,
-          name: album?.name ?? null,
-          image: album?.image ?? null,
-          artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? null
-        }
+      ? (() => {
+          const albumExternalIds = normalizeExternalIds(album);
+          return {
+            id: album?.id ?? null,
+            name: album?.name ?? null,
+            image: album?.image ?? null,
+            artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
+            externalIds: albumExternalIds,
+            spotifyId: pickFirstNonEmpty(album?.spotifyId, albumExternalIds.spotify[0]),
+            appleMusicId: pickFirstNonEmpty(
+              album?.appleMusicId,
+              albumExternalIds.appleMusic[0]
+            )
+          };
+        })()
       : null,
     image: album?.image ?? null,
-    spotifyId: track?.spotifyId ?? track?.externalIds?.spotify?.[0] ?? null,
-    appleMusicId: track?.appleMusicId ?? track?.externalIds?.appleMusic?.[0] ?? null
+    externalIds: trackExternalIds,
+    spotifyId: pickFirstNonEmpty(track?.spotifyId, trackExternalIds.spotify[0]),
+    appleMusicId: pickFirstNonEmpty(track?.appleMusicId, trackExternalIds.appleMusic[0])
   };
 }
 
@@ -126,21 +213,32 @@ export function normalizeRecentItem(item: any) {
 
 export function normalizeTopItem(item: any, type: "artists" | "tracks" | "albums") {
   if (type === "artists") {
+    const artist = item?.artist;
+    const externalIds = normalizeExternalIds(artist);
+
     return {
-      id: item?.artist?.id ?? null,
-      name: item?.artist?.name ?? null,
-      image: item?.artist?.image ?? null,
+      id: artist?.id ?? null,
+      name: artist?.name ?? null,
+      image: artist?.image ?? null,
+      externalIds,
+      spotifyId: pickFirstNonEmpty(artist?.spotifyId, externalIds.spotify[0]),
+      appleMusicId: pickFirstNonEmpty(artist?.appleMusicId, externalIds.appleMusic[0]),
       streams: item?.streams ?? 0
     };
   }
 
   if (type === "albums") {
     const album = item?.album;
+    const externalIds = normalizeExternalIds(album);
+
     return {
       id: album?.id ?? null,
       name: album?.name ?? null,
       artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
       image: album?.image ?? null,
+      externalIds,
+      spotifyId: pickFirstNonEmpty(album?.spotifyId, externalIds.spotify[0]),
+      appleMusicId: pickFirstNonEmpty(album?.appleMusicId, externalIds.appleMusic[0]),
       streams: item?.streams ?? 0
     };
   }
