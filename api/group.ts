@@ -2,21 +2,13 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../lib/users.js";
 import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
 import { normalizeRecentItem, normalizeTopItem } from "../lib/normalize.js";
+import {
+  getStartOfMonthSPMs,
+  getStartOfTodaySPMs,
+  getStartOfWeekSPMs,
+  TIMEZONE_SP,
+} from "../lib/time.js";
 
-function startOfTodayMs() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function startOfWeekMs() {
-  return Date.now() - 7 * 24 * 60 * 60 * 1000;
-}
-
-function startOfMonthMs() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-}
 
 function getDisplayName(profileData: any, fallback: string) {
   return (
@@ -27,11 +19,14 @@ function getDisplayName(profileData: any, fallback: string) {
   );
 }
 
-async function getUserBundle(key: string, user: { id: string }, force: boolean) {
-  const afterToday = startOfTodayMs();
-  const afterWeek = startOfWeekMs();
-  const afterMonth = startOfMonthMs();
-
+async function getUserBundle(
+  key: string,
+  user: { id: string },
+  force: boolean,
+  afterToday: number,
+  afterWeek: number,
+  afterMonth: number
+) {
   const [
     profile,
     recent,
@@ -129,8 +124,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const force = req.query.force === "1";
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string }]>;
 
+  const afterToday = getStartOfTodaySPMs();
+  const afterWeek = getStartOfWeekSPMs();
+  const afterMonth = getStartOfMonthSPMs();
+
   const settled = await Promise.allSettled(
-    users.map(([key, user]) => getUserBundle(String(key), user, force))
+    users.map(([key, user]) =>
+      getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth)
+    )
   );
 
   const members = settled.map((result, index) => {
@@ -192,15 +193,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       streams: member.stats?.today?.streams ?? 0,
     }));
 
+  const generatedAt = new Date().toISOString();
+  const debug = req.query.debug === "1";
+
   res.status(200).json({
     ok: true,
     source: "stats.fm-api",
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     members,
     rankings: {
       today: rankingToday,
       week: rankingWeek,
       month: rankingMonth,
     },
+    ...(debug
+      ? {
+          debug: {
+            timezone: TIMEZONE_SP,
+            afterToday,
+            afterWeek,
+            afterMonth,
+            generatedAt,
+          },
+        }
+      : {}),
   });
 }
