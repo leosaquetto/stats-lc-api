@@ -1,5 +1,7 @@
+import { USERS, type UserKey } from "./users";
+
 type ServicePlatform = "appleMusic" | "spotify" | "unknown";
-type ServiceConfidence = "high" | "medium" | "low";
+type ServiceConfidence = "high" | "medium" | "low" | "manual";
 
 const SERVICE_CANDIDATE_KEYS = [
   "service",
@@ -107,6 +109,60 @@ function extractTextValues(value: unknown): string[] {
   }
 
   return [];
+}
+
+
+export function extractUserPlatform(profileData: any, fallbackKey?: string) {
+  const profile = profileData?.profile ?? profileData ?? {};
+
+  const candidates = [
+    { key: "orderBy", value: profile?.orderBy, source: "orderBy", confidence: "medium" },
+    { key: "platform", value: profile?.platform, source: "profile", confidence: "high" },
+    { key: "service", value: profile?.service, source: "service", confidence: "high" },
+    { key: "services", value: profile?.services, source: "service", confidence: "medium" },
+    { key: "connectedServices", value: profile?.connectedServices, source: "service", confidence: "medium" },
+    { key: "integrations", value: profile?.integrations, source: "service", confidence: "medium" },
+    { key: "imports", value: profile?.imports, source: "import", confidence: "medium" },
+    { key: "importSource", value: profile?.importSource, source: "import", confidence: "high" },
+    { key: "musicService", value: profile?.musicService, source: "service", confidence: "high" },
+    { key: "streamingService", value: profile?.streamingService, source: "service", confidence: "high" },
+    { key: "settings", value: profile?.settings, source: "profile", confidence: "medium" },
+    { key: "serviceSettings", value: profile?.serviceSettings, source: "service", confidence: "medium" },
+    { key: "hasImported", value: profile?.hasImported, source: "import", confidence: "low" }
+  ] as const;
+
+  for (const candidate of candidates) {
+    for (const rawValue of extractTextValues(candidate.value)) {
+      const platform = normalizeServicePlatform(rawValue);
+      if (platform === "unknown") continue;
+      return {
+        primary: platform,
+        confidence: candidate.confidence as ServiceConfidence,
+        source: candidate.source,
+        sourceKey: candidate.key,
+        rawValue
+      };
+    }
+  }
+
+  const fallbackPlatform = fallbackKey ? USERS[fallbackKey as UserKey]?.platform ?? null : null;
+  if (fallbackPlatform) {
+    return {
+      primary: fallbackPlatform,
+      confidence: "manual" as ServiceConfidence,
+      source: "manual",
+      sourceKey: fallbackKey,
+      rawValue: fallbackPlatform
+    };
+  }
+
+  return {
+    primary: "unknown" as ServicePlatform,
+    confidence: "low" as ServiceConfidence,
+    source: "unknown",
+    sourceKey: null,
+    rawValue: null
+  };
 }
 
 export function extractServiceCandidate(obj: any) {
