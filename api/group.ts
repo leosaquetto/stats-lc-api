@@ -15,6 +15,44 @@ import {
 
 
 
+
+type PlatformPrimary = "appleMusic" | "spotify" | "unknown";
+type PlatformSource = "profile" | "recentItem" | "unknown";
+type PlatformConfidence = "high" | "medium" | "low";
+
+type PlatformDecision = {
+  primary: PlatformPrimary;
+  source: PlatformSource;
+  confidence: PlatformConfidence;
+};
+
+function resolvePlatformDecision(profileRaw: any, recentItemRaw: any): PlatformDecision {
+  const profileCandidate = extractServiceCandidate(profileRaw);
+  const recentCandidate = extractServiceCandidate(recentItemRaw);
+
+  if (recentCandidate.platform !== "unknown") {
+    return {
+      primary: recentCandidate.platform,
+      source: "recentItem",
+      confidence: "high",
+    };
+  }
+
+  if (profileCandidate.platform !== "unknown") {
+    return {
+      primary: profileCandidate.platform,
+      source: "profile",
+      confidence: "medium",
+    };
+  }
+
+  return {
+    primary: "unknown",
+    source: "unknown",
+    confidence: "low",
+  };
+}
+
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 
 function sanitizeDebugValue(value: any): any {
@@ -86,6 +124,12 @@ async function getUserBundle(
   const profileRaw = profileData?.item ?? null;
   const recentItemRaw = recentData?.items?.[0] ?? null;
 
+  const platformDecision = resolvePlatformDecision(profileRaw, recentItemRaw);
+  const nowPlayingRaw =
+    Array.isArray(recentData?.items) && recentData.items[0]
+      ? normalizeRecentItem(recentData.items[0])
+      : null;
+
   const debugData = debug
     ? {
         profileRawKeys: Object.keys(profileRaw || {}),
@@ -107,10 +151,15 @@ async function getUserBundle(
       image: profileData?.item?.image ?? null,
     },
 
-    nowPlaying:
-      Array.isArray(recentData?.items) && recentData.items[0]
-        ? normalizeRecentItem(recentData.items[0])
-        : null,
+    platform: platformDecision,
+
+    nowPlaying: nowPlayingRaw
+      ? {
+          ...nowPlayingRaw,
+          platformLegacy: nowPlayingRaw.platform,
+          platform: platformDecision,
+        }
+      : null,
 
     recent: Array.isArray(recentData?.items)
       ? recentData.items.map(normalizeRecentItem)
