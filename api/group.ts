@@ -1,0 +1,206 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { USERS } from "../lib/users";
+import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm";
+import { normalizeRecentItem, normalizeTopItem } from "../lib/normalize";
+
+function startOfTodayMs() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function startOfWeekMs() {
+  return Date.now() - 7 * 24 * 60 * 60 * 1000;
+}
+
+function startOfMonthMs() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+}
+
+function getDisplayName(profileData: any, fallback: string) {
+  return (
+    profileData?.item?.displayName ??
+    profileData?.item?.username ??
+    profileData?.item?.name ??
+    fallback
+  );
+}
+
+async function getUserBundle(key: string, user: { id: string }, force: boolean) {
+  const afterToday = startOfTodayMs();
+  const afterWeek = startOfWeekMs();
+  const afterMonth = startOfMonthMs();
+
+  const [
+    profile,
+    recent,
+    todayStats,
+    weekStats,
+    monthStats,
+    topArtists,
+    topTracks,
+    topAlbums,
+  ] = await Promise.all([
+    statsfmFetch(`/users/${user.id}`, { force }),
+    statsfmFetch(`/users/${user.id}/streams/recent?limit=10`, { force }),
+    statsfmFetch(`/users/${user.id}/streams/stats?after=${afterToday}`, { force }),
+    statsfmFetch(`/users/${user.id}/streams/stats?after=${afterWeek}`, { force }),
+    statsfmFetch(`/users/${user.id}/streams/stats?after=${afterMonth}`, { force }),
+    statsfmFetch(`/users/${user.id}/top/artists?after=${afterWeek}&limit=5`, { force }),
+    statsfmFetch(`/users/${user.id}/top/tracks?after=${afterWeek}&limit=5`, { force }),
+    statsfmFetch(`/users/${user.id}/top/albums?after=${afterWeek}&limit=5`, { force }),
+  ]);
+
+  const profileData: any = profile.data;
+  const recentData: any = recent.data;
+  const todayData: any = todayStats.data;
+  const weekData: any = weekStats.data;
+  const monthData: any = monthStats.data;
+  const artistsData: any = topArtists.data;
+  const tracksData: any = topTracks.data;
+  const albumsData: any = topAlbums.data;
+
+  const displayName = getDisplayName(profileData, key);
+
+  return {
+    key,
+    id: user.id,
+
+    profile: {
+      displayName,
+      username: profileData?.item?.username ?? null,
+      image: profileData?.item?.image ?? null,
+    },
+
+    nowPlaying:
+      Array.isArray(recentData?.items) && recentData.items[0]
+        ? normalizeRecentItem(recentData.items[0])
+        : null,
+
+    recent: Array.isArray(recentData?.items)
+      ? recentData.items.map(normalizeRecentItem)
+      : [],
+
+    stats: {
+      today: {
+        streams: getCount(todayData),
+        durationMs: getDurationMs(todayData),
+        minutes: Math.floor(getDurationMs(todayData) / 60000),
+      },
+      week: {
+        streams: getCount(weekData),
+        durationMs: getDurationMs(weekData),
+        minutes: Math.floor(getDurationMs(weekData) / 60000),
+      },
+      month: {
+        streams: getCount(monthData),
+        durationMs: getDurationMs(monthData),
+        minutes: Math.floor(getDurationMs(monthData) / 60000),
+      },
+    },
+
+    tops: {
+      artists: Array.isArray(artistsData?.items)
+        ? artistsData.items.map((item: any) => normalizeTopItem(item, "artists"))
+        : [],
+      tracks: Array.isArray(tracksData?.items)
+        ? tracksData.items.map((item: any) => normalizeTopItem(item, "tracks"))
+        : [],
+      albums: Array.isArray(albumsData?.items)
+        ? albumsData.items.map((item: any) => normalizeTopItem(item, "albums"))
+        : [],
+    },
+
+    errors: {
+      profile: profile.ok ? null : profile,
+      recent: recent.ok ? null : recent,
+      todayStats: todayStats.ok ? null : todayStats,
+      weekStats: weekStats.ok ? null : weekStats,
+      monthStats: monthStats.ok ? null : monthStats,
+      topArtists: topArtists.ok ? null : topArtists,
+      topTracks: topTracks.ok ? null : topTracks,
+      topAlbums: topAlbums.ok ? null : topAlbums,
+    },
+  };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const force = req.query.force === "1";
+  const users = Object.entries(USERS);
+
+  const settled = await Promise.allSettled(
+    users.map(([key, user]) => getUserBundle(key, user, force))
+  );
+
+  const members = settled.map((result, index) => {
+    if (result.status === "fulfilled") return result.value;
+
+    const [key, user] = users[index];
+
+    return {
+      key,
+      id: user.id,
+      profile: {
+        displayName: key,
+        username: null,
+        image: null,
+      },
+      error: String(result.reason),
+    };
+  });
+
+  const rankingWeek = [...members]
+    .sort(
+      (a: any, b: any) =>
+        (b?.stats?.week?.streams ?? 0) - (a?.stats?.week?.streams ?? 0)
+    )
+    .map((member: any, index) => ({
+      position: index + 1,
+      key: member.key,
+      id: member.id,
+      displayName: member.profile?.displayName ?? member.key,
+      image: member.profile?.image ?? null,
+      streams: member.stats?.week?.streams ?? 0,
+    }));
+
+  const rankingMonth = [...members]
+    .sort(
+      (a: any, b: any) =>
+        (b?.stats?.month?.streams ?? 0) - (a?.stats?.month?.streams ?? 0)
+    )
+    .map((member: any, index) => ({
+      position: index + 1,
+      key: member.key,
+      id: member.id,
+      displayName: member.profile?.displayName ?? member.key,
+      image: member.profile?.image ?? null,
+      streams: member.stats?.month?.streams ?? 0,
+    }));
+
+  const rankingToday = [...members]
+    .sort(
+      (a: any, b: any) =>
+        (b?.stats?.today?.streams ?? 0) - (a?.stats?.today?.streams ?? 0)
+    )
+    .map((member: any, index) => ({
+      position: index + 1,
+      key: member.key,
+      id: member.id,
+      displayName: member.profile?.displayName ?? member.key,
+      image: member.profile?.image ?? null,
+      streams: member.stats?.today?.streams ?? 0,
+    }));
+
+  res.status(200).json({
+    ok: true,
+    source: "stats.fm-api",
+    generatedAt: new Date().toISOString(),
+    members,
+    rankings: {
+      today: rankingToday,
+      week: rankingWeek,
+      month: rankingMonth,
+    },
+  });
+}
