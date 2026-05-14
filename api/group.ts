@@ -108,11 +108,24 @@ async function getUserBundle(
 
   const debugData = debug
     ? {
-        profileRawKeys: Object.keys(profileRaw || {}),
-        recentItemRawKeys: Object.keys(recentItemRaw || {}),
-        userPlatformDecision: sanitizeDebugValue(platformDecision),
-        profileRaw: sanitizeDebugValue(profileRaw),
-        recentItemRaw: sanitizeDebugValue(recentItemRaw),
+        rawKeys: {
+          profile: Object.keys(profileData?.item ?? profileData ?? {}),
+          recentItem: Object.keys(recentData?.items?.[0] ?? {}),
+          recentTrack: Object.keys(recentData?.items?.[0]?.track ?? {}),
+          recentAlbum: Object.keys(recentData?.items?.[0]?.track?.albums?.[0] ?? {}),
+        },
+        platformDecision: sanitizeDebugValue(platformDecision),
+        durationDecision: {
+          rawTrackDurationMs:
+            recentItemRaw?.track?.durationMs ??
+            recentItemRaw?.track?.duration_ms ??
+            recentItemRaw?.track?.duration ??
+            recentItemRaw?.track?.trackDurationMs ??
+            null,
+          normalizedDurationMs: nowPlayingRaw?.track?.durationMs ?? null,
+          rawPlayedMs: recentItemRaw?.playedMs ?? recentItemRaw?.played_ms ?? null,
+          normalizedPlayedMs: nowPlayingRaw?.playedMs ?? null,
+        },
       }
     : null;
 
@@ -268,6 +281,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const generatedAt = new Date().toISOString();
 
+  const debugPayload = debug
+    ? {
+        members: members.map((member: any) => ({
+          key: member?.key,
+          rawKeys: member?.debug?.rawKeys ?? null,
+          platformDecision: member?.platform ?? null,
+          durationDecision: member?.debug?.durationDecision ?? null,
+        })),
+      }
+    : undefined;
+
   res.status(200).json({
     ok: true,
     source: "stats.fm-api",
@@ -286,6 +310,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             afterWeek,
             afterMonth,
             generatedAt,
+            members: debugPayload?.members ?? [],
           },
         }
       : {}),
