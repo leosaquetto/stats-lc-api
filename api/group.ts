@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { USERS } from "../lib/users";
-import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm";
-import { normalizeRecentItem, normalizeTopItem } from "../lib/normalize";
+import { USERS } from "../lib/users.js";
+import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
+import { normalizeRecentItem, normalizeTopItem } from "../lib/normalize.js";
 
 function startOfTodayMs() {
   const d = new Date();
@@ -127,10 +127,10 @@ async function getUserBundle(key: string, user: { id: string }, force: boolean) 
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const force = req.query.force === "1";
-  const users = Object.entries(USERS);
+  const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string }]>;
 
   const settled = await Promise.allSettled(
-    users.map(([key, user]) => getUserBundle(key, user, force))
+    users.map(([key, user]) => getUserBundle(String(key), user, force))
   );
 
   const members = settled.map((result, index) => {
@@ -142,7 +142,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       key,
       id: user.id,
       profile: {
-        displayName: key,
+        displayName: String(key),
         username: null,
         image: null,
       },
