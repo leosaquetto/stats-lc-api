@@ -1,44 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { extractServiceCandidate } from "../lib/normalize.js";
+import { resolvePlatform } from "../lib/platform.js";
 import { resolveUserId } from "../lib/users.js";
 import { statsfmFetch } from "../lib/statsfm.js";
-
-type PlatformPrimary = "appleMusic" | "spotify" | "unknown";
-type PlatformSource = "profile" | "recentItem" | "unknown";
-type PlatformConfidence = "high" | "medium" | "low";
-
-type PlatformDecision = {
-  primary: PlatformPrimary;
-  source: PlatformSource;
-  confidence: PlatformConfidence;
-};
-
-function resolvePlatformDecision(profileRaw: any, recentItemRaw: any): PlatformDecision {
-  const profileCandidate = extractServiceCandidate(profileRaw);
-  const recentCandidate = extractServiceCandidate(recentItemRaw);
-
-  if (recentCandidate.platform !== "unknown") {
-    return {
-      primary: recentCandidate.platform,
-      source: "recentItem",
-      confidence: "high",
-    };
-  }
-
-  if (profileCandidate.platform !== "unknown") {
-    return {
-      primary: profileCandidate.platform,
-      source: "profile",
-      confidence: "medium",
-    };
-  }
-
-  return {
-    primary: "unknown",
-    source: "unknown",
-    confidence: "low",
-  };
-}
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 
@@ -73,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const result = await statsfmFetch(`/users/${userId}`, { force });
 
   const profileRaw = result?.data?.item ?? null;
-  const platform = resolvePlatformDecision(profileRaw, null);
+  const platform = resolvePlatform({ profileItem: profileRaw, recentItem: null });
 
   const payload = {
     ok: result.ok,
