@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     },
     platform,
     legacy: result,
-    raw: debug ? sanitizeDebugValue(result) : result,
+    ...(debug ? { raw: sanitizeDebugValue(result) } : {}),
   };
 
   res.status(result.ok ? 200 : result.status).json(payload);

@@ -154,7 +154,12 @@ async function getUserBundle(
                 durationMs: nowPlayingRaw.track.durationMs ?? null,
               }
             : null,
-          platform: nowPlayingRaw.platform ?? null,
+          platformCandidate: {
+            primary: nowPlayingRaw.platform ?? "unknown",
+            confidence: nowPlayingRaw.platformConfidence ?? "low",
+            sourceKey: nowPlayingRaw.platformSourceKey ?? null,
+            rawValue: nowPlayingRaw.serviceCandidate?.rawValue ?? null,
+          },
         }
       : null,
 

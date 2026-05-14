@@ -1,4 +1,4 @@
-import { USERS, type UserKey } from "./users";
+import { USERS, type UserKey } from "./users.js";
 
 type ServicePlatform = "appleMusic" | "spotify" | "unknown";
 type ServiceConfidence = "high" | "medium" | "low" | "manual";
@@ -113,6 +113,17 @@ function extractTextValues(value: unknown): string[] {
 
 
 export function extractUserPlatform(profileData: any, fallbackKey?: string) {
+  const fallbackPlatform = fallbackKey ? USERS[fallbackKey as UserKey]?.platform ?? null : null;
+  if (fallbackPlatform) {
+    return {
+      primary: fallbackPlatform,
+      confidence: "manual" as ServiceConfidence,
+      source: "manual",
+      sourceKey: fallbackKey,
+      rawValue: fallbackPlatform
+    };
+  }
+
   const profile = profileData?.profile ?? profileData ?? {};
 
   const candidates = [
@@ -143,17 +154,6 @@ export function extractUserPlatform(profileData: any, fallbackKey?: string) {
         rawValue
       };
     }
-  }
-
-  const fallbackPlatform = fallbackKey ? USERS[fallbackKey as UserKey]?.platform ?? null : null;
-  if (fallbackPlatform) {
-    return {
-      primary: fallbackPlatform,
-      confidence: "manual" as ServiceConfidence,
-      source: "manual",
-      sourceKey: fallbackKey,
-      rawValue: fallbackPlatform
-    };
   }
 
   return {
@@ -275,7 +275,7 @@ export function normalizeTrack(track: any) {
     id: track?.id ?? null,
     name: track?.name ?? null,
     durationMs: normalizeDurationMs(
-      pickFirstNonEmpty(track?.durationMs, track?.duration_ms, track?.duration, track?.trackDurationMs)
+      pickFirstNonEmpty(track?.durationMs, track?.duration_ms, track?.trackDurationMs)
     ),
     spotifyPopularity: asNumber(track?.spotifyPopularity),
     explicit: track?.explicit ?? null,
