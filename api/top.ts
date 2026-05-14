@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolveUserId } from "../lib/users";
-import { statsfmFetch } from "../lib/statsfm";
-import { normalizeTopItem } from "../lib/normalize";
+import { resolveUserId } from "../lib/users.js";
+import { statsfmFetch } from "../lib/statsfm.js";
+import { normalizeTopItem } from "../lib/normalize.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();

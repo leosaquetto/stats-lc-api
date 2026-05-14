@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolveUserId } from "../lib/users";
-import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm";
+import { resolveUserId } from "../lib/users.js";
+import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
 
 const routeMap = {
   track: "tracks",

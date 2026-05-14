@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolveUserId } from "../lib/users";
-import { statsfmFetch } from "../lib/statsfm";
-import { normalizeRecentItem } from "../lib/normalize";
+import { resolveUserId } from "../lib/users.js";
+import { statsfmFetch } from "../lib/statsfm.js";
+import { normalizeRecentItem } from "../lib/normalize.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
