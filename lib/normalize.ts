@@ -154,6 +154,26 @@ export function extractServiceCandidate(obj: any) {
 }
 
 
+export function normalizeArtist(artist: any) {
+  const externalIds = normalizeExternalIds(artist);
+  const spotifyId = pickFirstNonEmpty(artist?.spotifyId, externalIds.spotify[0]);
+  const appleMusicId = pickFirstNonEmpty(artist?.appleMusicId, externalIds.appleMusic[0]);
+
+  return {
+    id: artist?.id ?? null,
+    name: artist?.name ?? null,
+    image: normalizeImage(artist),
+    externalIds,
+    spotifyId,
+    appleMusicId,
+    catalogAvailability: {
+      spotify: externalIds.spotify.length > 0 || !!spotifyId,
+      appleMusic: externalIds.appleMusic.length > 0 || !!appleMusicId
+    },
+    rawAvailableKeys: artist && typeof artist === "object" ? Object.keys(artist) : []
+  };
+}
+
 export function normalizeAlbum(album: any) {
   const externalIds = normalizeExternalIds(album);
   const spotifyId = pickFirstNonEmpty(album?.spotifyId, externalIds.spotify[0]);
@@ -168,16 +188,7 @@ export function normalizeAlbum(album: any) {
     spotifyPopularity: asNumber(album?.spotifyPopularity),
     artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
     artists: Array.isArray(album?.artists)
-      ? album.artists.map((artist: any) => {
-          const artistExternalIds = normalizeExternalIds(artist);
-          return {
-            id: artist?.id ?? null,
-            name: artist?.name ?? null,
-            externalIds: artistExternalIds,
-            spotifyId: pickFirstNonEmpty(artist?.spotifyId, artistExternalIds.spotify[0]),
-            appleMusicId: pickFirstNonEmpty(artist?.appleMusicId, artistExternalIds.appleMusic[0])
-          };
-        })
+      ? album.artists.map((artist: any) => normalizeArtist(artist))
       : [],
     artistId: album?.artist?.id ?? album?.artists?.[0]?.id ?? null,
     artistName: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
@@ -199,16 +210,7 @@ export function normalizeTrack(track: any) {
   const appleMusicId = pickFirstNonEmpty(track?.appleMusicId, trackExternalIds.appleMusic[0]);
 
   const artists = Array.isArray(track?.artists)
-    ? track.artists.map((artist: any) => {
-        const artistExternalIds = normalizeExternalIds(artist);
-        return {
-          id: artist?.id ?? null,
-          name: artist?.name ?? null,
-          externalIds: artistExternalIds,
-          spotifyId: pickFirstNonEmpty(artist?.spotifyId, artistExternalIds.spotify[0]),
-          appleMusicId: pickFirstNonEmpty(artist?.appleMusicId, artistExternalIds.appleMusic[0])
-        };
-      })
+    ? track.artists.map((artist: any) => normalizeArtist(artist))
     : [];
 
   const normalizedAlbum = album ? normalizeAlbum(album) : null;
@@ -241,28 +243,35 @@ export function normalizeTrack(track: any) {
 
 export function normalizeRecentItem(item: any) {
   const service = extractServiceCandidate(item);
+  const track = normalizeTrack(item?.track);
 
   return {
+    id: item?.id ?? null,
     playedAt: item?.endTime ?? item?.playedAt ?? null,
+    endTime: item?.endTime ?? item?.playedAt ?? null,
+    playedMs: normalizePlayedMs(item?.playedMs ?? item?.played_ms ?? null),
+    position: item?.position ?? null,
+    streams: item?.streams ?? null,
+    trackId: track?.id ?? null,
+    trackName: track?.name ?? null,
     platform: service.platform,
     platformConfidence: service.confidence,
     platformSourceKey: service.sourceKey,
-    track: normalizeTrack(item?.track)
+    serviceCandidate: {
+      platform: service.platform,
+      confidence: service.confidence,
+      sourceKey: service.sourceKey,
+      rawValue: service.rawValue
+    },
+    track,
+    rawAvailableKeys: item && typeof item === "object" ? Object.keys(item) : []
   };
 }
 
 export function normalizeTopItem(item: any, type: "artists" | "tracks" | "albums") {
   if (type === "artists") {
-    const artist = item?.artist;
-    const externalIds = normalizeExternalIds(artist);
-
     return {
-      id: artist?.id ?? null,
-      name: artist?.name ?? null,
-      image: artist?.image ?? null,
-      externalIds,
-      spotifyId: pickFirstNonEmpty(artist?.spotifyId, externalIds.spotify[0]),
-      appleMusicId: pickFirstNonEmpty(artist?.appleMusicId, externalIds.appleMusic[0]),
+      ...normalizeArtist(item?.artist),
       streams: item?.streams ?? 0
     };
   }
