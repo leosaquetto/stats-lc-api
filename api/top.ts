@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../lib/users.js";
 import { statsfmFetch } from "../lib/statsfm.js";
-import { normalizeTopItem } from "../lib/normalize.js";
+import { normalizeAlbum, normalizeArtist, normalizeTopItem, normalizeTrack } from "../lib/normalize.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();
@@ -61,7 +61,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     after,
     endpoint: result.endpoint,
     items: Array.isArray(data?.items)
-      ? data.items.map((item: any) => normalizeTopItem(item, type))
+      ? data.items.map((item: any) => {
+          if (type === "tracks") return { ...normalizeTrack(item?.track), streams: item?.streams ?? 0 };
+          if (type === "artists") return { ...normalizeArtist(item?.artist), streams: item?.streams ?? 0 };
+          if (type === "albums") return { ...normalizeAlbum(item?.album), streams: item?.streams ?? 0 };
+          return normalizeTopItem(item, type);
+        })
       : []
   });
 }
