@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolvePlatform } from "../lib/platform.js";
+import { extractUserPlatform } from "../lib/normalize.js";
 import { resolveUserId } from "../lib/users.js";
 import { statsfmFetch } from "../lib/statsfm.js";
 
@@ -36,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const result = await statsfmFetch(`/users/${userId}`, { force });
 
   const profileRaw = result?.data?.item ?? null;
-  const platform = resolvePlatform({ profileItem: profileRaw, recentItem: null });
+  const platform = extractUserPlatform(profileRaw, user);
 
   const payload = {
     ok: result.ok,
@@ -47,6 +47,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         profileRaw?.displayName ?? profileRaw?.username ?? profileRaw?.name ?? user,
       username: profileRaw?.username ?? null,
       image: profileRaw?.image ?? null,
+      hasImported: profileRaw?.hasImported ?? null,
+      orderBy: profileRaw?.orderBy ?? null,
+      platform: platform.primary,
+      rawAvailableKeys: profileRaw && typeof profileRaw === "object" ? Object.keys(profileRaw) : [],
     },
     platform,
     legacy: result,

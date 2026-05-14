@@ -2,10 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../lib/users.js";
 import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
 import {
+  extractUserPlatform,
   normalizeRecentItem,
   normalizeTopItem,
 } from "../lib/normalize.js";
-import { resolvePlatform } from "../lib/platform.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -87,23 +87,45 @@ async function getUserBundle(
   const profileRaw = profileData?.item ?? null;
   const recentItemRaw = recentData?.items?.[0] ?? null;
 
-  const platformDecision = resolvePlatform({
-    profileItem: profileRaw,
-    recentItem: recentItemRaw,
-  });
+  const platformDecision = extractUserPlatform(profileRaw, key);
   const nowPlayingRaw =
     Array.isArray(recentData?.items) && recentData.items[0]
       ? normalizeRecentItem(recentData.items[0])
       : null;
 
+  const recentNormalized = Array.isArray(recentData?.items)
+    ? recentData.items.map(normalizeRecentItem)
+    : [];
+
+  const catalogSummary = recentNormalized.reduce(
+    (acc: any, item: any) => {
+      if (item?.track?.catalogAvailability?.spotify) acc.recentSpotifyAvailableCount += 1;
+      if (item?.track?.catalogAvailability?.appleMusic) acc.recentAppleMusicAvailableCount += 1;
+      return acc;
+    },
+    { recentSpotifyAvailableCount: 0, recentAppleMusicAvailableCount: 0 }
+  );
+
   const debugData = debug
     ? {
-        profileRawKeys: Object.keys(profileRaw || {}),
-        recentItemRawKeys: Object.keys(recentItemRaw || {}),
-        profileServiceCandidate: sanitizeDebugValue(platformDecision.profileServiceCandidate),
-        recentItemServiceCandidate: sanitizeDebugValue(platformDecision.recentItemServiceCandidate),
-        profileRaw: sanitizeDebugValue(profileRaw),
-        recentItemRaw: sanitizeDebugValue(recentItemRaw),
+        rawKeys: {
+          profile: Object.keys(profileData?.item ?? profileData ?? {}),
+          recentItem: Object.keys(recentData?.items?.[0] ?? {}),
+          recentTrack: Object.keys(recentData?.items?.[0]?.track ?? {}),
+          recentAlbum: Object.keys(recentData?.items?.[0]?.track?.albums?.[0] ?? {}),
+        },
+        platformDecision: sanitizeDebugValue(platformDecision),
+        durationDecision: {
+          rawTrackDurationMs:
+            recentItemRaw?.track?.durationMs ??
+            recentItemRaw?.track?.duration_ms ??
+            recentItemRaw?.track?.duration ??
+            recentItemRaw?.track?.trackDurationMs ??
+            null,
+          normalizedDurationMs: nowPlayingRaw?.track?.durationMs ?? null,
+          rawPlayedMs: recentItemRaw?.playedMs ?? recentItemRaw?.played_ms ?? null,
+          normalizedPlayedMs: nowPlayingRaw?.playedMs ?? null,
+        },
       }
     : null;
 
@@ -119,17 +141,29 @@ async function getUserBundle(
 
     platform: platformDecision,
 
+    catalogSummary,
+
     nowPlaying: nowPlayingRaw
       ? {
           ...nowPlayingRaw,
-          platformLegacy: nowPlayingRaw.platform,
-          platform: platformDecision,
+          playedMs: nowPlayingRaw.playedMs ?? null,
+          durationMs: nowPlayingRaw?.track?.durationMs ?? null,
+          track: nowPlayingRaw.track
+            ? {
+                ...nowPlayingRaw.track,
+                durationMs: nowPlayingRaw.track.durationMs ?? null,
+              }
+            : null,
+          platformCandidate: {
+            primary: nowPlayingRaw.platform ?? "unknown",
+            confidence: nowPlayingRaw.platformConfidence ?? "low",
+            sourceKey: nowPlayingRaw.platformSourceKey ?? null,
+            rawValue: nowPlayingRaw.serviceCandidate?.rawValue ?? null,
+          },
         }
       : null,
 
-    recent: Array.isArray(recentData?.items)
-      ? recentData.items.map(normalizeRecentItem)
-      : [],
+    recent: recentNormalized,
 
     stats: {
       today: {
@@ -252,6 +286,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const generatedAt = new Date().toISOString();
 
+  const debugPayload = debug
+    ? {
+        members: members.map((member: any) => ({
+          key: member?.key,
+          rawKeys: member?.debug?.rawKeys ?? null,
+          platformDecision: member?.platform ?? null,
+          durationDecision: member?.debug?.durationDecision ?? null,
+        })),
+      }
+    : undefined;
+
   res.status(200).json({
     ok: true,
     source: "stats.fm-api",
@@ -270,6 +315,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             afterWeek,
             afterMonth,
             generatedAt,
+            members: debugPayload?.members ?? [],
           },
         }
       : {}),
