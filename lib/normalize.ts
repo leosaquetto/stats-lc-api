@@ -306,6 +306,7 @@ export function normalizeRecentItem(item: any) {
     playedAt: item?.endTime ?? item?.playedAt ?? null,
     endTime: item?.endTime ?? item?.playedAt ?? null,
     playedMs: normalizePlayedMs(item?.playedMs ?? item?.played_ms ?? null),
+    durationMs: track?.durationMs ?? null,
     position: item?.position ?? null,
     streams: item?.streams ?? null,
     trackId: track?.id ?? null,
