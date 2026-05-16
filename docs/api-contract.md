@@ -25,3 +25,15 @@ Represents **catalog availability** for the track.
 `externalIds` are used for catalog/discovery mapping only.
 
 - `externalIds` **must not** be used alone to infer playback source/platform origin.
+
+## stats.fm Resilience
+
+`statsfmFetch(path, { force })` remains the only upstream entrypoint and keeps the same public success/error shape consumed by the handlers.
+
+- Responses are cached in memory per normalized `path`.
+- `force=1` still means "try to refresh", but now respects a short per-path cooldown to avoid burst bypasses.
+- Simultaneous requests to the same `path` are deduplicated onto one upstream request.
+- Upstream calls use timeout protection and at most 1 retry only for `500`, `502`, `503`, `504`, timeout, and network errors.
+- `429`, `400`, `401`, `403`, and `404` do not retry automatically.
+- When the upstream fails and there is a recent successful cached value still inside the stale window, handlers may serve that stale value without changing their public payload shape.
+- Cache/debug metadata is intentionally kept out of normal endpoint payloads and is exposed only via `/api/health` and optional debug surfaces.

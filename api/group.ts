@@ -1,6 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../lib/users.js";
-import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
+import {
+  getCount,
+  getDurationMs,
+  getStatsfmHealthSnapshot,
+  statsfmFetch,
+} from "../lib/statsfm.js";
 import {
   extractUserPlatform,
   normalizeRecentItem,
@@ -316,6 +321,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             afterMonth,
             generatedAt,
             members: debugPayload?.members ?? [],
+            statsfm: getStatsfmHealthSnapshot(),
           },
         }
       : {}),
