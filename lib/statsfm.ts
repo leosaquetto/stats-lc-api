@@ -1,10 +1,15 @@
+import { getMonthRangeSegments, TIMEZONE_SP } from "./time.ts";
+
 const API_BASE = "https://api.stats.fm/api/v1";
-const FRESH_TTL_MS = 60_000;
+const DEFAULT_FRESH_TTL_MS = 60_000;
 const STALE_TTL_MS = 10 * 60_000;
 const FORCE_COOLDOWN_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const RETRY_DELAY_MS = 300;
 const MAX_RETRIES = 1;
+const CURRENT_MONTH_FRESH_TTL_MS = 5 * 60_000;
+const PREVIOUS_MONTH_FRESH_TTL_MS = 12 * 60 * 60_000;
+const HISTORICAL_MONTH_FRESH_TTL_MS = 7 * 24 * 60 * 60_000;
 
 export type StatsfmResult = {
   ok: boolean;
@@ -13,24 +18,55 @@ export type StatsfmResult = {
   data: unknown;
 };
 
+type AggregateMode = "auto" | "none";
+
 type StatsfmFetchOptions = {
   force?: boolean;
+  aggregateMode?: AggregateMode;
 };
+
+type CacheScope = "path" | "monthly_segment";
+type SegmentKind = "stats" | "dates" | null;
 
 type CacheEntry = {
   result: StatsfmResult;
   cachedAt: number;
   expiresAt: number;
   staleUntil: number;
+  freshTtlMs: number;
   lastErrorAt: number | null;
   lastErrorStatus: number | null;
   lastErrorReason: string | null;
   lastServedAt: number;
+  scope: CacheScope;
+  segmentKind: SegmentKind;
 };
 
 type InternalFetchOutcome = {
   result: StatsfmResult;
   source: "upstream" | "cache";
+};
+
+type FetchCacheConfig = {
+  freshTtlMs: number;
+  scope: CacheScope;
+  segmentKind: SegmentKind;
+};
+
+type TemporalAggregateKind = "stats" | "dates";
+
+type TemporalAggregateDescriptor = {
+  kind: TemporalAggregateKind;
+  pathname: string;
+  originalPath: string;
+  after: number;
+  before: number;
+  baseParams: Array<[string, string]>;
+};
+
+type DateBucket = {
+  count: number;
+  durationMs: number;
 };
 
 const cache = new Map<string, CacheEntry>();
@@ -44,11 +80,13 @@ const metrics = {
   cacheHits: 0,
   dedupedRequests: 0,
   cooldownHits: 0,
+  aggregateSegmentReuses: 0,
 };
 const startedAt = Date.now();
+let nowOverride: number | null = null;
 
 function now() {
-  return Date.now();
+  return nowOverride ?? Date.now();
 }
 
 function sleep(ms: number) {
@@ -90,19 +128,22 @@ function updateErrorState(path: string, error: { status?: number; reason?: strin
   });
 }
 
-function saveSuccess(path: string, result: StatsfmResult) {
+function saveSuccess(path: string, result: StatsfmResult, config: FetchCacheConfig) {
   const timestamp = now();
   const key = normalizePath(path);
 
   cache.set(key, {
     result,
     cachedAt: timestamp,
-    expiresAt: timestamp + FRESH_TTL_MS,
+    expiresAt: timestamp + config.freshTtlMs,
     staleUntil: timestamp + STALE_TTL_MS,
+    freshTtlMs: config.freshTtlMs,
     lastErrorAt: null,
     lastErrorStatus: null,
     lastErrorReason: null,
     lastServedAt: timestamp,
+    scope: config.scope,
+    segmentKind: config.segmentKind,
   });
 }
 
@@ -120,6 +161,28 @@ function markServed(path: string) {
 
 function shouldRetryStatus(status: number) {
   return [500, 502, 503, 504].includes(status);
+}
+
+function getDefaultCacheConfig(): FetchCacheConfig {
+  return {
+    freshTtlMs: DEFAULT_FRESH_TTL_MS,
+    scope: "path",
+    segmentKind: null,
+  };
+}
+
+function getMonthlyCacheConfig(kind: TemporalAggregateKind, recency: "current" | "previous" | "historical"): FetchCacheConfig {
+  const freshTtlMs = recency === "current"
+    ? CURRENT_MONTH_FRESH_TTL_MS
+    : recency === "previous"
+      ? PREVIOUS_MONTH_FRESH_TTL_MS
+      : HISTORICAL_MONTH_FRESH_TTL_MS;
+
+  return {
+    freshTtlMs,
+    scope: "monthly_segment",
+    segmentKind: kind,
+  };
 }
 
 async function parseResponse(response: Response) {
@@ -195,7 +258,11 @@ async function fetchUpstream(path: string, force: boolean, attempt: number): Pro
   }
 }
 
-async function executeFetch(path: string, options?: StatsfmFetchOptions): Promise<InternalFetchOutcome> {
+async function executeFetch(
+  path: string,
+  options?: StatsfmFetchOptions,
+  cacheConfig: FetchCacheConfig = getDefaultCacheConfig()
+): Promise<InternalFetchOutcome> {
   const key = normalizePath(path);
   const timestamp = now();
   const force = options?.force === true;
@@ -204,6 +271,7 @@ async function executeFetch(path: string, options?: StatsfmFetchOptions): Promis
 
   if (!force && isFresh(cached, timestamp)) {
     metrics.cacheHits += 1;
+    if (cached?.scope === "monthly_segment") metrics.aggregateSegmentReuses += 1;
     markServed(key);
     return {
       result: cached!.result,
@@ -217,6 +285,7 @@ async function executeFetch(path: string, options?: StatsfmFetchOptions): Promis
     (isFresh(cached, timestamp) || isStaleUsable(cached, timestamp))
   ) {
     metrics.cooldownHits += 1;
+    if (cached?.scope === "monthly_segment") metrics.aggregateSegmentReuses += 1;
     markServed(key);
     return {
       result: cached!.result,
@@ -237,7 +306,7 @@ async function executeFetch(path: string, options?: StatsfmFetchOptions): Promis
     const upstream = await fetchUpstream(key, force, 0);
 
     if (upstream.ok) {
-      saveSuccess(key, upstream);
+      saveSuccess(key, upstream, cacheConfig);
       if (force) {
         forceCooldowns.set(key, now() + FORCE_COOLDOWN_MS);
       }
@@ -255,6 +324,7 @@ async function executeFetch(path: string, options?: StatsfmFetchOptions): Promis
     const fallback = getCacheEntry(key);
     if (isStaleUsable(fallback, now())) {
       metrics.staleServed += 1;
+      if (fallback?.scope === "monthly_segment") metrics.aggregateSegmentReuses += 1;
       markServed(key);
       return fallback!.result;
     }
@@ -275,7 +345,229 @@ async function executeFetch(path: string, options?: StatsfmFetchOptions): Promis
   }
 }
 
+function readNumber(value: unknown) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : 0;
+}
+
+function isTemporalAggregateKind(value: string): value is TemporalAggregateKind {
+  return value === "stats" || value === "dates";
+}
+
+function parseTemporalAggregatePath(path: string): TemporalAggregateDescriptor | null {
+  const normalized = normalizePath(path);
+  const url = new URL(normalized, "https://stats.local");
+  const segments = url.pathname.split("/").filter(Boolean);
+
+  if (segments.length !== 4 || segments[0] !== "users" || segments[2] !== "streams") {
+    return null;
+  }
+
+  const kind = segments[3];
+  if (!isTemporalAggregateKind(kind)) {
+    return null;
+  }
+
+  const afterRaw = url.searchParams.get("after");
+  if (!afterRaw) return null;
+
+  const after = Number(afterRaw);
+  if (!Number.isFinite(after)) return null;
+
+  const beforeRaw = url.searchParams.get("before");
+  const before = beforeRaw ? Number(beforeRaw) : now();
+  if (!Number.isFinite(before) || before <= after) return null;
+
+  const baseParams = [...url.searchParams.entries()].filter(
+    ([key]) => key !== "after" && key !== "before"
+  );
+
+  return {
+    kind,
+    pathname: url.pathname,
+    originalPath: normalized,
+    after,
+    before,
+    baseParams,
+  };
+}
+
+function buildSegmentPath(descriptor: TemporalAggregateDescriptor, after: number, before: number) {
+  const params = new URLSearchParams(descriptor.baseParams);
+  params.set("after", String(after));
+  params.set("before", String(before));
+  return `${descriptor.pathname}?${params.toString()}`;
+}
+
+function createDateBucketMap(start: number, end: number) {
+  return Array.from({ length: end - start + 1 }).reduce((acc, _, offset) => {
+    acc[String(start + offset)] = {
+      count: 0,
+      durationMs: 0,
+    };
+    return acc;
+  }, {} as Record<string, DateBucket>);
+}
+
+function readBucketEntry(source: any, index: number, keyCandidates: string[]) {
+  if (!source) return null;
+
+  if (Array.isArray(source)) {
+    const match = source.find((entry: any) =>
+      keyCandidates.some((key) => entry?.[key] != null && readNumber(entry[key]) === index)
+    );
+
+    if (match) return match;
+
+    const direct = source[index];
+    if (
+      direct &&
+      typeof direct === "object" &&
+      keyCandidates.every((key) => direct[key] == null) &&
+      ("count" in direct || "durationMs" in direct || "durationMS" in direct)
+    ) {
+      return direct;
+    }
+
+    return null;
+  }
+
+  if (typeof source === "object") {
+    return source[String(index)] ?? source[index] ?? null;
+  }
+
+  return null;
+}
+
+function normalizeBucketCollection(
+  source: any,
+  start: number,
+  end: number,
+  keyCandidates: string[]
+) {
+  const normalized = createDateBucketMap(start, end);
+
+  for (let index = start; index <= end; index += 1) {
+    const entry = readBucketEntry(source, index, keyCandidates);
+    normalized[String(index)] = {
+      count: readNumber(entry?.count),
+      durationMs: readNumber(entry?.durationMs ?? entry?.durationMS),
+    };
+  }
+
+  return normalized;
+}
+
+function mergeStatsAggregate(parts: StatsfmResult[]) {
+  return {
+    items: {
+      count: parts.reduce((sum, part) => sum + getCount(part.data), 0),
+      durationMs: parts.reduce((sum, part) => sum + getDurationMs(part.data), 0),
+    },
+  };
+}
+
+function mergeDatesAggregate(parts: StatsfmResult[]) {
+  const hours = createDateBucketMap(0, 23);
+  const months = createDateBucketMap(1, 12);
+  const weekDays = createDateBucketMap(1, 7);
+
+  for (const part of parts) {
+    const data: any = part.data;
+    const normalizedHours = normalizeBucketCollection(data?.items?.hours, 0, 23, ["hour", "index", "id"]);
+    const normalizedMonths = normalizeBucketCollection(data?.items?.months, 1, 12, ["month", "index", "id"]);
+    const normalizedWeekDays = normalizeBucketCollection(
+      data?.items?.weekDays,
+      1,
+      7,
+      ["weekDay", "weekday", "day", "dayOfWeek", "index", "id"]
+    );
+
+    for (const [bucket, value] of Object.entries(normalizedHours)) {
+      hours[bucket].count += value.count;
+      hours[bucket].durationMs += value.durationMs;
+    }
+
+    for (const [bucket, value] of Object.entries(normalizedMonths)) {
+      months[bucket].count += value.count;
+      months[bucket].durationMs += value.durationMs;
+    }
+
+    for (const [bucket, value] of Object.entries(normalizedWeekDays)) {
+      weekDays[bucket].count += value.count;
+      weekDays[bucket].durationMs += value.durationMs;
+    }
+  }
+
+  return {
+    items: {
+      hours,
+      months,
+      weekDays,
+    },
+  };
+}
+
+async function executeTemporalAggregate(
+  descriptor: TemporalAggregateDescriptor,
+  options?: StatsfmFetchOptions
+): Promise<InternalFetchOutcome> {
+  const segments = getMonthRangeSegments(
+    descriptor.after,
+    descriptor.before,
+    TIMEZONE_SP,
+    new Date(now())
+  );
+
+  if (segments.length === 0) {
+    return executeFetch(descriptor.originalPath, options);
+  }
+
+  const parts = await Promise.all(
+    segments.map((segment) =>
+      executeFetch(
+        buildSegmentPath(descriptor, segment.after, segment.before),
+        options,
+        getMonthlyCacheConfig(descriptor.kind, segment.recency)
+      )
+    )
+  );
+
+  const failed = parts.find((part) => !part.result.ok);
+  if (failed) {
+    return {
+      result: {
+        ...failed.result,
+        endpoint: getEndpoint(descriptor.originalPath),
+      },
+      source: failed.source,
+    };
+  }
+
+  const data = descriptor.kind === "stats"
+    ? mergeStatsAggregate(parts.map((part) => part.result))
+    : mergeDatesAggregate(parts.map((part) => part.result));
+
+  return {
+    result: {
+      ok: true,
+      status: 200,
+      endpoint: getEndpoint(descriptor.originalPath),
+      data,
+    },
+    source: parts.some((part) => part.source === "upstream") ? "upstream" : "cache",
+  };
+}
+
 export async function statsfmFetch(path: string, options?: StatsfmFetchOptions) {
+  const aggregateMode = options?.aggregateMode ?? "auto";
+  const aggregate = aggregateMode === "auto" ? parseTemporalAggregatePath(path) : null;
+
+  if (aggregate) {
+    const outcome = await executeTemporalAggregate(aggregate, options);
+    return outcome.result;
+  }
+
   const outcome = await executeFetch(path, options);
   return outcome.result;
 }
@@ -293,6 +585,11 @@ export function getStatsfmHealthSnapshot() {
       nextAllowedForceAt: new Date(until).toISOString(),
       remainingMs: Math.max(0, until - timestamp),
     }));
+  const monthlySegmentEntries = [...cache.entries()].filter(([, entry]) => entry.scope === "monthly_segment");
+  const monthlyFreshEntries = monthlySegmentEntries.filter(([, entry]) => entry.expiresAt > timestamp).length;
+  const monthlyStaleEntries = monthlySegmentEntries.filter(
+    ([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp
+  ).length;
 
   return {
     uptimeMs: timestamp - startedAt,
@@ -301,16 +598,28 @@ export function getStatsfmHealthSnapshot() {
     staleEntries,
     expiredEntries,
     cooldownEntries,
+    monthlySegments: {
+      total: monthlySegmentEntries.length,
+      fresh: monthlyFreshEntries,
+      stale: monthlyStaleEntries,
+      stats: monthlySegmentEntries.filter(([, entry]) => entry.segmentKind === "stats").length,
+      dates: monthlySegmentEntries.filter(([, entry]) => entry.segmentKind === "dates").length,
+    },
     metrics: {
       ...metrics,
     },
     config: {
-      freshTtlMs: FRESH_TTL_MS,
+      defaultFreshTtlMs: DEFAULT_FRESH_TTL_MS,
       staleTtlMs: STALE_TTL_MS,
       forceCooldownMs: FORCE_COOLDOWN_MS,
       timeoutMs: REQUEST_TIMEOUT_MS,
       retryDelayMs: RETRY_DELAY_MS,
       maxRetries: MAX_RETRIES,
+      monthlyFreshTtls: {
+        currentMonthMs: CURRENT_MONTH_FRESH_TTL_MS,
+        previousMonthMs: PREVIOUS_MONTH_FRESH_TTL_MS,
+        historicalMonthMs: HISTORICAL_MONTH_FRESH_TTL_MS,
+      },
     },
   };
 }
@@ -326,6 +635,12 @@ export function __resetStatsfmStateForTests() {
   metrics.cacheHits = 0;
   metrics.dedupedRequests = 0;
   metrics.cooldownHits = 0;
+  metrics.aggregateSegmentReuses = 0;
+  nowOverride = null;
+}
+
+export function __setStatsfmNowForTests(timestamp: number | null) {
+  nowOverride = timestamp;
 }
 
 export function getCount(data: any) {
@@ -334,4 +649,25 @@ export function getCount(data: any) {
 
 export function getDurationMs(data: any) {
   return data?.items?.durationMs ?? data?.item?.durationMs ?? data?.durationMs ?? 0;
+}
+
+export function getCardinality(data: any) {
+  return {
+    artists: readNumber(data?.items?.cardinality?.artists ?? data?.item?.cardinality?.artists),
+    tracks: readNumber(data?.items?.cardinality?.tracks ?? data?.item?.cardinality?.tracks),
+    albums: readNumber(data?.items?.cardinality?.albums ?? data?.item?.cardinality?.albums),
+  };
+}
+
+export function getDatesBreakdown(data: any) {
+  return {
+    hours: normalizeBucketCollection(data?.items?.hours, 0, 23, ["hour", "index", "id"]),
+    months: normalizeBucketCollection(data?.items?.months, 1, 12, ["month", "index", "id"]),
+    weekDays: normalizeBucketCollection(
+      data?.items?.weekDays,
+      1,
+      7,
+      ["weekDay", "weekday", "day", "dayOfWeek", "index", "id"]
+    ),
+  };
 }

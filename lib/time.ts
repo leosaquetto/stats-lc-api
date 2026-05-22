@@ -50,6 +50,25 @@ function zonedMidnightToUtcMs(year: number, month: number, day: number, timeZone
   return utcGuess - offset;
 }
 
+function getMonthStartMsInTimeZone(timestamp: number, timeZone: string) {
+  const { year, month } = getDatePartsInTimeZone(new Date(timestamp), timeZone);
+  return zonedMidnightToUtcMs(year, month, 1, timeZone);
+}
+
+function addMonth(year: number, month: number) {
+  if (month === 12) {
+    return {
+      year: year + 1,
+      month: 1,
+    };
+  }
+
+  return {
+    year,
+    month: month + 1,
+  };
+}
+
 export function getStartOfTodaySPMs() {
   const { year, month, day } = getDatePartsInTimeZone(new Date(), SP_TIMEZONE);
   return zonedMidnightToUtcMs(year, month, day, SP_TIMEZONE);
@@ -62,6 +81,63 @@ export function getStartOfWeekSPMs() {
 export function getStartOfMonthSPMs() {
   const { year, month } = getDatePartsInTimeZone(new Date(), SP_TIMEZONE);
   return zonedMidnightToUtcMs(year, month, 1, SP_TIMEZONE);
+}
+
+export function getMonthRangeSegments(
+  startMs: number,
+  endMs: number,
+  timeZone: string = SP_TIMEZONE,
+  referenceDate: Date = new Date()
+) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return [];
+  }
+
+  const current = getDatePartsInTimeZone(referenceDate, timeZone);
+  const previous = current.month === 1
+    ? { year: current.year - 1, month: 12 }
+    : { year: current.year, month: current.month - 1 };
+
+  const segments: Array<{
+    after: number;
+    before: number;
+    year: number;
+    month: number;
+    monthStartMs: number;
+    nextMonthStartMs: number;
+    recency: "current" | "previous" | "historical";
+  }> = [];
+
+  let cursor = startMs;
+
+  while (cursor < endMs) {
+    const { year, month } = getDatePartsInTimeZone(new Date(cursor), timeZone);
+    const monthStartMs = getMonthStartMsInTimeZone(cursor, timeZone);
+    const next = addMonth(year, month);
+    const nextMonthStartMs = zonedMidnightToUtcMs(next.year, next.month, 1, timeZone);
+    const before = Math.min(endMs, nextMonthStartMs);
+
+    let recency: "current" | "previous" | "historical" = "historical";
+    if (year === current.year && month === current.month) {
+      recency = "current";
+    } else if (year === previous.year && month === previous.month) {
+      recency = "previous";
+    }
+
+    segments.push({
+      after: cursor,
+      before,
+      year,
+      month,
+      monthStartMs,
+      nextMonthStartMs,
+      recency,
+    });
+
+    cursor = before;
+  }
+
+  return segments;
 }
 
 export const TIMEZONE_SP = SP_TIMEZONE;
