@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDatesBreakdown, statsfmFetch } from "../lib/statsfm.ts";
-import { resolveUserId } from "../lib/users.ts";
+import { getDatesBreakdown, statsfmFetch } from "../lib/statsfm.js";
+import { resolveUserId } from "../lib/users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");

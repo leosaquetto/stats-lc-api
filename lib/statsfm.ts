@@ -1,4 +1,4 @@
-import { getMonthRangeSegments, TIMEZONE_SP } from "./time.ts";
+import { getMonthRangeSegments, TIMEZONE_SP } from "./time.js";
 
 const API_BASE = "https://api.stats.fm/api/v1";
 const DEFAULT_FRESH_TTL_MS = 60_000;
