@@ -219,6 +219,9 @@ export function normalizeArtist(artist: any) {
     id: artist?.id ?? null,
     name: artist?.name ?? null,
     image: normalizeImage(artist),
+    followers: asNumber(artist?.followers),
+    genres: asArray(artist?.genres),
+    spotifyPopularity: asNumber(artist?.spotifyPopularity),
     externalIds,
     spotifyId,
     appleMusicId,
@@ -294,6 +297,9 @@ export function normalizeAlbum(album: any) {
     name: album?.name ?? null,
     type: album?.type ?? null,
     image: normalizeImage(album),
+    label: album?.label ?? null,
+    releaseDate: album?.releaseDate ?? null,
+    genres: asArray(album?.genres),
     totalTracks: asNumber(pickFirstNonEmpty(album?.totalTracks, album?.total_tracks)),
     spotifyPopularity: asNumber(album?.spotifyPopularity),
     artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
@@ -339,6 +345,8 @@ export function normalizeTrack(track: any) {
     ),
     spotifyPopularity: asNumber(track?.spotifyPopularity),
     explicit: track?.explicit ?? null,
+    spotifyPreview: track?.spotifyPreview ?? null,
+    appleMusicPreview: track?.appleMusicPreview ?? null,
     image: normalizeImage(album),
     artists,
     primaryArtist,
@@ -373,8 +381,9 @@ export function normalizeRecentItem(item: any) {
     durationMs: track?.durationMs ?? null,
     position: item?.position ?? null,
     streams: item?.streams ?? null,
-    trackId: track?.id ?? null,
-    trackName: track?.name ?? null,
+    indicator: item?.indicator ?? null,
+    trackId: track?.id ?? item?.trackId ?? null,
+    trackName: track?.name ?? item?.trackName ?? null,
     platform: service.platform,
     platformConfidence: service.confidence,
     platformSourceKey: service.sourceKey,
@@ -393,19 +402,60 @@ export function normalizeTopItem(item: any, type: "artists" | "tracks" | "albums
   if (type === "artists") {
     return {
       ...normalizeArtist(item?.artist),
-      streams: item?.streams ?? 0
+      streams: item?.streams ?? 0,
+      playedMs: normalizePlayedMs(item?.playedMs ?? item?.played_ms ?? null),
+      position: item?.position ?? null,
+      indicator: item?.indicator ?? null
     };
   }
 
   if (type === "albums") {
     return {
       ...normalizeAlbum(item?.album),
-      streams: item?.streams ?? 0
+      streams: item?.streams ?? 0,
+      playedMs: normalizePlayedMs(item?.playedMs ?? item?.played_ms ?? null),
+      position: item?.position ?? null,
+      indicator: item?.indicator ?? null
     };
   }
 
   return {
     ...normalizeTrack(item?.track),
-    streams: item?.streams ?? 0
+    streams: item?.streams ?? 0,
+    playedMs: normalizePlayedMs(item?.playedMs ?? item?.played_ms ?? null),
+    position: item?.position ?? null,
+    indicator: item?.indicator ?? null
   };
+}
+
+export function normalizeUserSummary(user: any) {
+  return {
+    id: user?.id ?? null,
+    customId: user?.customId ?? null,
+    displayName: user?.displayName ?? user?.username ?? user?.name ?? null,
+    username: user?.username ?? null,
+    image: user?.image ?? null,
+    isPlus: user?.isPlus ?? null,
+    isPro: user?.isPro ?? null,
+    orderBy: user?.orderBy ?? null,
+    timezone: user?.timezone ?? null,
+    recentlyActive: user?.recentlyActive ?? null,
+    hasImported: user?.hasImported ?? null,
+    syncEnabled: user?.syncEnabled ?? null,
+    profile: user?.profile
+      ? {
+          bio: user.profile?.bio ?? null,
+          pronouns: user.profile?.pronouns ?? null,
+          theme: user.profile?.theme ?? null,
+        }
+      : null,
+    privacySettings: user?.privacySettings ?? null,
+    rawAvailableKeys: user && typeof user === "object" ? Object.keys(user) : []
+  };
+}
+
+export function normalizeEntity(entity: any, type: "track" | "artist" | "album") {
+  if (type === "track") return normalizeTrack(entity);
+  if (type === "artist") return normalizeArtist(entity);
+  return normalizeAlbum(entity);
 }
