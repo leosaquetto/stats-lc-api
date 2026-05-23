@@ -261,7 +261,6 @@ async function fetchUserComparisonData(
   const [
     profile,
     stats,
-    cardinality,
     dates,
     topTracks,
     topArtists,
@@ -271,10 +270,6 @@ async function fetchUserComparisonData(
     lastStreams,
   ] = await Promise.all([
     statsfmFetch(`/users/${encodeSegment(userId)}`, { force }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/streams/stats${buildQuery(rangeQuery)}`, {
-      force,
-      aggregateMode: "none",
-    }),
     statsfmFetch(`/users/${encodeSegment(userId)}/streams/stats${buildQuery(rangeQuery)}`, {
       force,
       aggregateMode: "none",
@@ -295,7 +290,7 @@ async function fetchUserComparisonData(
   for (const [key, result] of Object.entries({
     profile,
     stats,
-    cardinality,
+    cardinality: stats,
     dates,
     topTracks,
     topArtists,
@@ -309,7 +304,6 @@ async function fetchUserComparisonData(
 
   const statsData: any = stats.ok ? stats.data : null;
   const durationMs = getDurationMs(statsData);
-  const cardinalityData: any = cardinality.ok ? cardinality.data : statsData;
 
   return {
     input: user,
@@ -320,7 +314,7 @@ async function fetchUserComparisonData(
       durationMs,
       minutes: Math.floor(durationMs / 60000),
       hours: Math.floor(durationMs / 3600000),
-      cardinality: getCardinality(cardinalityData),
+      cardinality: getCardinality(statsData),
     },
     tops: {
       tracks: topTracks.ok ? getItems(topTracks.data).map((item) => normalizeStreamItemForKind(item, "tracks")) : [],
