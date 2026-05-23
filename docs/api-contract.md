@@ -45,51 +45,56 @@ Represents **catalog availability** for the track.
 - Cache/debug metadata is intentionally kept out of normal endpoint payloads and is exposed only via `/api/health` and optional debug surfaces.
 - Live now-playing calls may opt into an internal `cacheProfile: "live"` with a shorter fresh/stale window. This is still handled inside `statsfmFetch` and does not change normal endpoint payloads.
 
-## Additional Public Endpoints
+## Public Endpoint Reference
 
-- `/api/group-live`
-  - Lightweight group live surface for Home/now-playing polling.
-  - Exposes `ok`, `source`, `generatedAt`, and `members`.
-  - Each member includes `key`, `id`, minimal `profile`, `platform`, and `nowPlaying`.
-  - Does not include stats, tops, leaderboard data, or cache metadata.
-- `/api/entity-group-stats`
-  - Aggregates one entity stat lookup across all configured group users.
-  - Query: `type=track|artist|album` and `id=<entity id>`, with optional `force=1`.
-  - Exposes `members[].{key,id,count,durationMs,minutes}`.
-  - Partial user-level upstream failures are contained per member instead of failing the whole response.
-- `/api/stats-cardinality`
-  - Exposes `streams`, `durationMs`, `minutes`, `hours`, and `cardinality.{artists,tracks,albums}` for a `user` + `after` range, with optional `before` and `force=1`.
-- `/api/stats-dates`
-  - Exposes stable zero-filled `hours`, `months`, `weekDays`, and `monthDays` bucket maps for a `user` + `after` range, with optional `before` and `force=1`.
-- `/api/entity`
-  - Query: `type=track|artist|album` and `id=<entity id>`, with optional `force=1`.
-  - Returns a normalized `entity` object for stats.fm track, artist, or album detail pages.
-- `/api/entity-streams`
-  - Query: `type=track|artist|album`, `id=<entity id>`, `user=<user>`, optional `limit`, `offset`, `after`, `before`, and `force=1`.
-  - Returns normalized stream rows for a user's plays of that entity.
-- `/api/entity-listeners`
-  - Query: `type=track|artist|album`, `id=<entity id>`, optional `friends=1`, `limit`, `offset`, and `force=1`.
-  - Returns top listener rows with `position`, `streams`, `playedMs`, `indicator`, and normalized user summary.
-- `/api/album-tracks`
-  - Query: `id=<album id>`, with optional `force=1`.
-  - Returns normalized tracks for an album page.
-- `/api/artist-catalog`
-  - Query: `id=<artist id>` and `section=tracks|top-tracks|albums|top-albums|related`, with optional `limit`, `offset`, and `force=1`.
-  - Returns normalized tracks, albums, or related artists for artist page sections.
-- `/api/user-friends`
-  - Query: `user=<user>`, with optional `force=1`.
-  - Returns normalized friends plus a best-effort `count`; count lookup failure is isolated under `errors.count`.
-- `/api/user-streams`
-  - Query: `user=<user>`, optional `limit`, `offset`, `after`, `before`, and `force=1`.
-  - Returns normalized stream rows for the user stream/recent-streams pages.
-- `/api/search`
-  - Query: `q=<query>` or `query=<query>`, optional `type=track,artist,album,user`, `limit`, and `force=1`.
-  - Returns typed normalized search results.
-- `/api/compare`
-  - Query: `users=<csv>` with 2 to 5 aliases or stats.fm IDs/custom IDs, optional `period=4w|6m|all|month|week`, explicit `after`/`before` epoch ms, `limit`, and `force=1`.
-  - Explicit `after`/`before` takes priority over `period`; presets are calculated in the Sao Paulo timezone.
-  - Returns `users`, `summaryByUser`, `common.tracks|artists|albums|genres`, `timeByUser`, `firstStreamsByUser`, `lastStreamsByUser`, and per-user partial `errors`.
-  - Common rows are computed locally by matching entity `id` first and `externalIds.spotify/appleMusic` as fallback; rows expose original per-user ranks and `sharedByCount`.
+All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/users.ts` or raw stats.fm IDs/custom IDs. `force=1` asks the backend to refresh through `statsfmFetch`, but it still respects cooldown, cache, retry, and stale fallback policy.
+
+### Core group and profile endpoints
+
+| Endpoint | Query | Purpose | Response highlights |
+| --- | --- | --- | --- |
+| `/api/group` | optional `force=1`, `debug=1` | Full group dashboard payload. | `members`, `rankings.today|week|month`, each member's `profile`, `platform`, `catalogSummary`, `nowPlaying`, `recent`, `stats`, `tops`, and per-section `errors`. Debug includes Sao Paulo range anchors and sanitized upstream/cache details. |
+| `/api/group-live` | optional `force=1`, `debug=1` | Lightweight Home/now-playing polling surface. | `ok`, `source`, `generatedAt`, and `members`. Each member includes `key`, `id`, minimal `profile`, `platform`, and `nowPlaying`. It intentionally omits stats, tops, leaderboard data, and cache metadata. |
+| `/api/user` | `user=<user>`, optional `force=1`, `debug=1` | One user profile summary. | `profile`, resolved `platform`, `legacy` upstream result, and sanitized `raw` only when `debug=1`. |
+| `/api/health` | none | Operational snapshot for agents and debugging. | `ok`, `service`, `time`, and `statsfm` cache/retry/metric snapshot. Cache/debug metadata belongs here, not in normal payloads. |
+
+### User stats, recents, and tops
+
+| Endpoint | Query | Purpose | Response highlights |
+| --- | --- | --- | --- |
+| `/api/recent` | `user=<user>`, optional `limit` default `50`, `offset` default `0`, `force=1` | Recent streams for a user. | Normalized stream `items` from `/streams/recent`. |
+| `/api/stats` | `user=<user>`, `after=<epoch ms>`, optional `before=<epoch ms>`, `force=1` | Basic listening totals for a range. | `streams`, `durationMs`, `minutes`, and `hours`. |
+| `/api/stats-cardinality` | `user=<user>`, `after=<epoch ms>`, optional `before=<epoch ms>`, `force=1` | Listening totals plus unique entity counts. | `streams`, `durationMs`, `minutes`, `hours`, and `cardinality.{artists,tracks,albums}`. Uses raw upstream stats for the requested range instead of reconstructing cardinality from monthly blocks. |
+| `/api/stats-dates` | `user=<user>`, `after=<epoch ms>`, optional `before=<epoch ms>`, `force=1` | Time distribution buckets for charts. | Stable zero-filled `hours`, `months`, `weekDays`, and `monthDays` maps. |
+| `/api/top` | `user=<user>`, optional `type=artists|tracks|albums` default `tracks`, `period=today|week|month|all` default `week`, `after=<epoch ms>`, `limit` default `20`, `force=1` | Normalized top artists/tracks/albums. | `items` normalized by `type`; explicit `after` overrides the period-derived range. |
+| `/api/user-streams` | `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | Stream history page data. | Normalized stream `items` for `/users/:id/streams`. |
+| `/api/user-friends` | `user=<user>`, optional `force=1` | Friends page data. | Normalized friend `items` plus best-effort `count`; count lookup failure is isolated under `errors.count`. |
+
+### Entity and catalog endpoints
+
+| Endpoint | Query | Purpose | Response highlights |
+| --- | --- | --- | --- |
+| `/api/entity` | `type=track|artist|album`, `id=<entity id>`, optional `force=1` | Entity detail page data. | Normalized `entity` object for stats.fm track, artist, or album detail pages. |
+| `/api/entity-stats` | `user=<user>`, `type=track|artist|album`, `id=<entity id>`, optional `force=1` | One user's stats for one entity. | `count`, `durationMs`, and `minutes`. |
+| `/api/entity-group-stats` | `type=track|artist|album`, `id=<entity id>`, optional `force=1` | Group-wide stats for one entity. | `generatedAt` and `members[].{key,id,count,durationMs,minutes}`. Partial user-level upstream failures are contained per member instead of failing the whole response. |
+| `/api/entity-streams` | `type=track|artist|album`, `id=<entity id>`, `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | A user's play history for one entity. | Normalized stream `items`. |
+| `/api/entity-listeners` | `type=track|artist|album`, `id=<entity id>`, optional `friends=1`, `limit`, `offset`, `force=1` | Entity top listener ranking. | Rows with `position`, `streams`, `playedMs`, `indicator`, and normalized user summary. |
+| `/api/album-tracks` | `id=<album id>`, optional `force=1` | Album track list. | Normalized track `items`. |
+| `/api/artist-catalog` | `id=<artist id>`, `section=tracks|top-tracks|albums|top-albums|related`, optional `limit`, `offset`, `force=1` | Artist page catalog sections. | Normalized tracks, albums, or related artists depending on `section`. |
+
+### Discovery and comparison endpoints
+
+| Endpoint | Query | Purpose | Response highlights |
+| --- | --- | --- | --- |
+| `/api/search` | `q=<query>` or `query=<query>`, optional `type=track,artist,album,user`, `limit`, `force=1` | Typed search facade. | `items[]` shaped as `{ type, item }`, with normalized track/artist/album/user payloads when recognized. |
+| `/api/compare` | `users=<csv>` with 2 to 5 aliases or stats.fm IDs/custom IDs, optional `period=4w|6m|all|month|week`, explicit `after`/`before` epoch ms, `limit` default `250` max `500`, `force=1` | Rich comparison across users. | `users`, `summaryByUser`, `common.tracks|artists|albums|genres`, `timeByUser`, `firstStreamsByUser`, `lastStreamsByUser`, and per-user partial `errors`. Explicit `after` takes priority over `period`; presets are calculated in the Sao Paulo timezone. Common rows match entity `id` first and `externalIds.spotify/appleMusic` as catalog fallback, expose original per-user ranks, `score`, and `sharedByCount`. |
+
+### Common response conventions
+
+- Success payloads include `ok: true` and usually include the resolved upstream `endpoint`.
+- Missing or invalid required params return `ok: false` with stable error strings such as `missing_user`, `missing_user_or_after`, `missing_type_or_id`, `missing_params`, `invalid_type`, `missing_users`, `too_many_users`, or `invalid_range`.
+- Normal endpoint payloads should not expose `statsfmFetch` cache/cooldown/stale metadata. Use `/api/health` or explicit debug surfaces.
+- `debug=1` is intentionally limited to selected endpoints and sanitizes sensitive keys matching token, authorization, cookie, secret, or session.
 
 ## Reference App Route Matrix
 
