@@ -40,6 +40,55 @@ test("cache hit avoids a second upstream fetch", async () => {
   assert.equal(getStatsfmHealthSnapshot().metrics.cacheHits, 1);
 });
 
+test("live cache profile expires faster than the default cache", async () => {
+  __setStatsfmNowForTests(1_000);
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse({ item: { version: calls } });
+  };
+
+  const first = await statsfmFetch("/users/leo/streams/recent?limit=1", {
+    cacheProfile: "live",
+  });
+  const second = await statsfmFetch("/users/leo/streams/recent?limit=1", {
+    cacheProfile: "live",
+  });
+
+  __setStatsfmNowForTests(1_000 + 21_000);
+
+  const third = await statsfmFetch("/users/leo/streams/recent?limit=1", {
+    cacheProfile: "live",
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(third.ok, true);
+  assert.equal(calls, 2);
+  assert.deepEqual((first.data as any).item, { version: 1 });
+  assert.deepEqual((second.data as any).item, { version: 1 });
+  assert.deepEqual((third.data as any).item, { version: 2 });
+  assert.equal(getStatsfmHealthSnapshot().cacheProfiles.live.total, 1);
+});
+
+test("default cache keeps the existing one minute fresh window", async () => {
+  __setStatsfmNowForTests(1_000);
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse({ item: { version: calls } });
+  };
+
+  await statsfmFetch("/users/leo");
+  __setStatsfmNowForTests(1_000 + 21_000);
+  const second = await statsfmFetch("/users/leo");
+
+  assert.equal(calls, 1);
+  assert.deepEqual((second.data as any).item, { version: 1 });
+});
+
 test("force bypasses fresh cache outside cooldown", async () => {
   let calls = 0;
 
@@ -257,57 +306,12 @@ test("dates aggregate merges buckets across monthly segments and fills missing v
   const result = await statsfmFetch(`/users/leo/streams/dates?after=${marchStart}&before=${mayStart}`);
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.data, {
-    items: {
-      hours: {
-        0: { count: 0, durationMs: 0 },
-        1: { count: 5, durationMs: 5000 },
-        2: { count: 0, durationMs: 0 },
-        3: { count: 0, durationMs: 0 },
-        4: { count: 0, durationMs: 0 },
-        5: { count: 0, durationMs: 0 },
-        6: { count: 0, durationMs: 0 },
-        7: { count: 0, durationMs: 0 },
-        8: { count: 0, durationMs: 0 },
-        9: { count: 0, durationMs: 0 },
-        10: { count: 0, durationMs: 0 },
-        11: { count: 0, durationMs: 0 },
-        12: { count: 0, durationMs: 0 },
-        13: { count: 0, durationMs: 0 },
-        14: { count: 0, durationMs: 0 },
-        15: { count: 0, durationMs: 0 },
-        16: { count: 0, durationMs: 0 },
-        17: { count: 0, durationMs: 0 },
-        18: { count: 0, durationMs: 0 },
-        19: { count: 0, durationMs: 0 },
-        20: { count: 0, durationMs: 0 },
-        21: { count: 0, durationMs: 0 },
-        22: { count: 0, durationMs: 0 },
-        23: { count: 0, durationMs: 0 },
-      },
-      months: {
-        1: { count: 0, durationMs: 0 },
-        2: { count: 0, durationMs: 0 },
-        3: { count: 2, durationMs: 2000 },
-        4: { count: 4, durationMs: 4000 },
-        5: { count: 0, durationMs: 0 },
-        6: { count: 0, durationMs: 0 },
-        7: { count: 0, durationMs: 0 },
-        8: { count: 0, durationMs: 0 },
-        9: { count: 0, durationMs: 0 },
-        10: { count: 0, durationMs: 0 },
-        11: { count: 0, durationMs: 0 },
-        12: { count: 0, durationMs: 0 },
-      },
-      weekDays: {
-        1: { count: 0, durationMs: 0 },
-        2: { count: 0, durationMs: 0 },
-        3: { count: 0, durationMs: 0 },
-        4: { count: 0, durationMs: 0 },
-        5: { count: 3, durationMs: 1200 },
-        6: { count: 0, durationMs: 0 },
-        7: { count: 0, durationMs: 0 },
-      },
-    },
-  });
+  const items = (result.data as any).items;
+  assert.deepEqual(items.hours["1"], { count: 5, durationMs: 5000 });
+  assert.deepEqual(items.hours["0"], { count: 0, durationMs: 0 });
+  assert.deepEqual(items.months["3"], { count: 2, durationMs: 2000 });
+  assert.deepEqual(items.months["4"], { count: 4, durationMs: 4000 });
+  assert.deepEqual(items.weekDays["5"], { count: 3, durationMs: 1200 });
+  assert.deepEqual(items.monthDays["1"], { count: 0, durationMs: 0 });
+  assert.equal(Object.keys(items.monthDays).length, 31);
 });

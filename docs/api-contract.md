@@ -43,10 +43,32 @@ Represents **catalog availability** for the track.
 - When the upstream fails and there is a recent successful cached value still inside the stale window, handlers may serve that stale value without changing their public payload shape.
 - Cardinality lookups use the raw upstream `streams/stats` response for the requested range and are not reconstructed from monthly blocks.
 - Cache/debug metadata is intentionally kept out of normal endpoint payloads and is exposed only via `/api/health` and optional debug surfaces.
+- Live now-playing calls may opt into an internal `cacheProfile: "live"` with a shorter fresh/stale window. This is still handled inside `statsfmFetch` and does not change normal endpoint payloads.
 
 ## Additional Public Endpoints
 
+- `/api/group-live`
+  - Lightweight group live surface for Home/now-playing polling.
+  - Exposes `ok`, `source`, `generatedAt`, and `members`.
+  - Each member includes `key`, `id`, minimal `profile`, `platform`, and `nowPlaying`.
+  - Does not include stats, tops, leaderboard data, or cache metadata.
+- `/api/entity-group-stats`
+  - Aggregates one entity stat lookup across all configured group users.
+  - Query: `type=track|artist|album` and `id=<entity id>`, with optional `force=1`.
+  - Exposes `members[].{key,id,count,durationMs,minutes}`.
+  - Partial user-level upstream failures are contained per member instead of failing the whole response.
 - `/api/stats-cardinality`
   - Exposes `streams`, `durationMs`, `minutes`, `hours`, and `cardinality.{artists,tracks,albums}` for a `user` + `after` range, with optional `before` and `force=1`.
 - `/api/stats-dates`
-  - Exposes stable zero-filled `hours`, `months`, and `weekDays` bucket maps for a `user` + `after` range, with optional `before` and `force=1`.
+  - Exposes stable zero-filled `hours`, `months`, `weekDays`, and `monthDays` bucket maps for a `user` + `after` range, with optional `before` and `force=1`.
+
+## Normalized Entity Fields
+
+Normalized tracks keep their existing fields and additionally expose primary-artist helpers:
+
+- `track.primaryArtist`
+- `track.primaryArtistId`
+- `track.primaryArtistName`
+- `track.secondaryArtists`
+
+Primary artist selection prefers the album owner when it matches a track artist, then explicit primary/main artist markers from the raw payload, then the first track artist. Normalized albums also expose `primaryArtist`, `primaryArtistId`, and `primaryArtistName`.

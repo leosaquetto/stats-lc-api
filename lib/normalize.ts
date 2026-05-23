@@ -230,10 +230,64 @@ export function normalizeArtist(artist: any) {
   };
 }
 
+function normalizedText(value: unknown) {
+  return typeof value === "string"
+    ? value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+    : "";
+}
+
+function sameArtist(a: any, b: any) {
+  if (!a || !b) return false;
+
+  const aId = asString(a?.id);
+  const bId = asString(b?.id);
+  if (aId && bId && aId === bId) return true;
+
+  const aName = normalizedText(a?.name);
+  const bName = normalizedText(b?.name);
+  return Boolean(aName && bName && aName === bName);
+}
+
+function pickPrimaryArtist(artists: any[], album: any, rawArtists: any[] = []) {
+  if (artists.length === 0) return null;
+
+  const albumCandidates = [
+    album?.artist,
+    ...(Array.isArray(album?.artists) ? album.artists : []),
+  ].filter(Boolean);
+
+  for (const candidate of albumCandidates) {
+    const normalizedCandidate = typeof candidate === "string"
+      ? { id: null, name: candidate }
+      : normalizeArtist(candidate);
+    const match = artists.find((artist) => sameArtist(artist, normalizedCandidate));
+    if (match) return match;
+  }
+
+  const markedRawArtist = rawArtists.find((artist: any) =>
+    artist?.isMainArtist === true ||
+    artist?.isPrimary === true ||
+    artist?.role === "main" ||
+    artist?.role === "primary"
+  );
+  if (markedRawArtist) {
+    const normalizedMarked = normalizeArtist(markedRawArtist);
+    const match = artists.find((artist) => sameArtist(artist, normalizedMarked));
+    if (match) return match;
+  }
+
+  return artists[0];
+}
+
 export function normalizeAlbum(album: any) {
   const externalIds = normalizeExternalIds(album);
   const spotifyId = pickFirstNonEmpty(album?.spotifyId, externalIds.spotify[0]);
   const appleMusicId = pickFirstNonEmpty(album?.appleMusicId, externalIds.appleMusic[0]);
+
+  const artists = Array.isArray(album?.artists)
+    ? album.artists.map((artist: any) => normalizeArtist(artist))
+    : [];
+  const primaryArtist = artists[0] ?? (album?.artist ? normalizeArtist(album.artist) : null);
 
   return {
     id: album?.id ?? null,
@@ -243,11 +297,12 @@ export function normalizeAlbum(album: any) {
     totalTracks: asNumber(pickFirstNonEmpty(album?.totalTracks, album?.total_tracks)),
     spotifyPopularity: asNumber(album?.spotifyPopularity),
     artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
-    artists: Array.isArray(album?.artists)
-      ? album.artists.map((artist: any) => normalizeArtist(artist))
-      : [],
+    artists,
     artistId: album?.artist?.id ?? album?.artists?.[0]?.id ?? null,
     artistName: album?.artist?.name ?? album?.artists?.[0]?.name ?? null,
+    primaryArtist,
+    primaryArtistId: primaryArtist?.id ?? null,
+    primaryArtistName: primaryArtist?.name ?? null,
     externalIds,
     spotifyId,
     appleMusicId,
@@ -265,11 +320,16 @@ export function normalizeTrack(track: any) {
   const spotifyId = pickFirstNonEmpty(track?.spotifyId, trackExternalIds.spotify[0]);
   const appleMusicId = pickFirstNonEmpty(track?.appleMusicId, trackExternalIds.appleMusic[0]);
 
-  const artists = Array.isArray(track?.artists)
-    ? track.artists.map((artist: any) => normalizeArtist(artist))
+  const rawArtists = Array.isArray(track?.artists) ? track.artists : [];
+  const artists = rawArtists.length > 0
+    ? rawArtists.map((artist: any) => normalizeArtist(artist))
     : [];
 
   const normalizedAlbum = album ? normalizeAlbum(album) : null;
+  const primaryArtist = pickPrimaryArtist(artists, album, rawArtists);
+  const secondaryArtists = primaryArtist
+    ? artists.filter((artist: any) => !sameArtist(artist, primaryArtist))
+    : [];
 
   return {
     id: track?.id ?? null,
@@ -281,6 +341,10 @@ export function normalizeTrack(track: any) {
     explicit: track?.explicit ?? null,
     image: normalizeImage(album),
     artists,
+    primaryArtist,
+    secondaryArtists,
+    primaryArtistId: primaryArtist?.id ?? null,
+    primaryArtistName: primaryArtist?.name ?? null,
     artistIds: artists.map((artist: any) => artist?.id).filter(Boolean),
     album: normalizedAlbum,
     albumId: normalizedAlbum?.id ?? null,

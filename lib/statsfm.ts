@@ -7,6 +7,8 @@ const FORCE_COOLDOWN_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const RETRY_DELAY_MS = 300;
 const MAX_RETRIES = 1;
+const LIVE_FRESH_TTL_MS = 20_000;
+const LIVE_STALE_TTL_MS = 45_000;
 const CURRENT_MONTH_FRESH_TTL_MS = 5 * 60_000;
 const PREVIOUS_MONTH_FRESH_TTL_MS = 12 * 60 * 60_000;
 const HISTORICAL_MONTH_FRESH_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -19,10 +21,12 @@ export type StatsfmResult = {
 };
 
 type AggregateMode = "auto" | "none";
+type CacheProfile = "default" | "live";
 
 type StatsfmFetchOptions = {
   force?: boolean;
   aggregateMode?: AggregateMode;
+  cacheProfile?: CacheProfile;
 };
 
 type CacheScope = "path" | "monthly_segment";
@@ -34,6 +38,8 @@ type CacheEntry = {
   expiresAt: number;
   staleUntil: number;
   freshTtlMs: number;
+  staleTtlMs: number;
+  cacheProfile: CacheProfile;
   lastErrorAt: number | null;
   lastErrorStatus: number | null;
   lastErrorReason: string | null;
@@ -49,6 +55,8 @@ type InternalFetchOutcome = {
 
 type FetchCacheConfig = {
   freshTtlMs: number;
+  staleTtlMs: number;
+  cacheProfile: CacheProfile;
   scope: CacheScope;
   segmentKind: SegmentKind;
 };
@@ -136,8 +144,10 @@ function saveSuccess(path: string, result: StatsfmResult, config: FetchCacheConf
     result,
     cachedAt: timestamp,
     expiresAt: timestamp + config.freshTtlMs,
-    staleUntil: timestamp + STALE_TTL_MS,
+    staleUntil: timestamp + config.staleTtlMs,
     freshTtlMs: config.freshTtlMs,
+    staleTtlMs: config.staleTtlMs,
+    cacheProfile: config.cacheProfile,
     lastErrorAt: null,
     lastErrorStatus: null,
     lastErrorReason: null,
@@ -166,9 +176,25 @@ function shouldRetryStatus(status: number) {
 function getDefaultCacheConfig(): FetchCacheConfig {
   return {
     freshTtlMs: DEFAULT_FRESH_TTL_MS,
+    staleTtlMs: STALE_TTL_MS,
+    cacheProfile: "default",
     scope: "path",
     segmentKind: null,
   };
+}
+
+function getCacheConfigForOptions(options?: StatsfmFetchOptions): FetchCacheConfig {
+  if (options?.cacheProfile === "live") {
+    return {
+      freshTtlMs: LIVE_FRESH_TTL_MS,
+      staleTtlMs: LIVE_STALE_TTL_MS,
+      cacheProfile: "live",
+      scope: "path",
+      segmentKind: null,
+    };
+  }
+
+  return getDefaultCacheConfig();
 }
 
 function getMonthlyCacheConfig(kind: TemporalAggregateKind, recency: "current" | "previous" | "historical"): FetchCacheConfig {
@@ -180,6 +206,8 @@ function getMonthlyCacheConfig(kind: TemporalAggregateKind, recency: "current" |
 
   return {
     freshTtlMs,
+    staleTtlMs: STALE_TTL_MS,
+    cacheProfile: "default",
     scope: "monthly_segment",
     segmentKind: kind,
   };
@@ -261,8 +289,9 @@ async function fetchUpstream(path: string, force: boolean, attempt: number): Pro
 async function executeFetch(
   path: string,
   options?: StatsfmFetchOptions,
-  cacheConfig: FetchCacheConfig = getDefaultCacheConfig()
+  cacheConfig?: FetchCacheConfig
 ): Promise<InternalFetchOutcome> {
+  const resolvedCacheConfig = cacheConfig ?? getCacheConfigForOptions(options);
   const key = normalizePath(path);
   const timestamp = now();
   const force = options?.force === true;
@@ -306,7 +335,7 @@ async function executeFetch(
     const upstream = await fetchUpstream(key, force, 0);
 
     if (upstream.ok) {
-      saveSuccess(key, upstream, cacheConfig);
+      saveSuccess(key, upstream, resolvedCacheConfig);
       if (force) {
         forceCooldowns.set(key, now() + FORCE_COOLDOWN_MS);
       }
@@ -400,13 +429,17 @@ function buildSegmentPath(descriptor: TemporalAggregateDescriptor, after: number
 }
 
 function createDateBucketMap(start: number, end: number) {
-  return Array.from({ length: end - start + 1 }).reduce((acc, _, offset) => {
+  return Array.from({ length: end - start + 1 }).reduce<Record<string, DateBucket>>((acc, _, offset) => {
     acc[String(start + offset)] = {
       count: 0,
       durationMs: 0,
     };
     return acc;
   }, {} as Record<string, DateBucket>);
+}
+
+function createMonthDayBucketMap() {
+  return createDateBucketMap(1, 31);
 }
 
 function readBucketEntry(source: any, index: number, keyCandidates: string[]) {
@@ -444,7 +477,7 @@ function normalizeBucketCollection(
   start: number,
   end: number,
   keyCandidates: string[]
-) {
+): Record<string, DateBucket> {
   const normalized = createDateBucketMap(start, end);
 
   for (let index = start; index <= end; index += 1) {
@@ -471,11 +504,18 @@ function mergeDatesAggregate(parts: StatsfmResult[]) {
   const hours = createDateBucketMap(0, 23);
   const months = createDateBucketMap(1, 12);
   const weekDays = createDateBucketMap(1, 7);
+  const monthDays = createMonthDayBucketMap();
 
   for (const part of parts) {
     const data: any = part.data;
     const normalizedHours = normalizeBucketCollection(data?.items?.hours, 0, 23, ["hour", "index", "id"]);
     const normalizedMonths = normalizeBucketCollection(data?.items?.months, 1, 12, ["month", "index", "id"]);
+    const normalizedMonthDays = normalizeBucketCollection(
+      data?.items?.monthDays ?? data?.items?.days,
+      1,
+      31,
+      ["monthDay", "dayOfMonth", "day", "index", "id"]
+    );
     const normalizedWeekDays = normalizeBucketCollection(
       data?.items?.weekDays,
       1,
@@ -497,6 +537,11 @@ function mergeDatesAggregate(parts: StatsfmResult[]) {
       weekDays[bucket].count += value.count;
       weekDays[bucket].durationMs += value.durationMs;
     }
+
+    for (const [bucket, value] of Object.entries(normalizedMonthDays)) {
+      monthDays[bucket].count += value.count;
+      monthDays[bucket].durationMs += value.durationMs;
+    }
   }
 
   return {
@@ -504,6 +549,7 @@ function mergeDatesAggregate(parts: StatsfmResult[]) {
       hours,
       months,
       weekDays,
+      monthDays,
     },
   };
 }
@@ -586,6 +632,8 @@ export function getStatsfmHealthSnapshot() {
       remainingMs: Math.max(0, until - timestamp),
     }));
   const monthlySegmentEntries = [...cache.entries()].filter(([, entry]) => entry.scope === "monthly_segment");
+  const liveEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "live");
+  const defaultEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "default");
   const monthlyFreshEntries = monthlySegmentEntries.filter(([, entry]) => entry.expiresAt > timestamp).length;
   const monthlyStaleEntries = monthlySegmentEntries.filter(
     ([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp
@@ -598,6 +646,18 @@ export function getStatsfmHealthSnapshot() {
     staleEntries,
     expiredEntries,
     cooldownEntries,
+    cacheProfiles: {
+      default: {
+        total: defaultEntries.length,
+        fresh: defaultEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
+        stale: defaultEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
+      },
+      live: {
+        total: liveEntries.length,
+        fresh: liveEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
+        stale: liveEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
+      },
+    },
     monthlySegments: {
       total: monthlySegmentEntries.length,
       fresh: monthlyFreshEntries,
@@ -615,6 +675,8 @@ export function getStatsfmHealthSnapshot() {
       timeoutMs: REQUEST_TIMEOUT_MS,
       retryDelayMs: RETRY_DELAY_MS,
       maxRetries: MAX_RETRIES,
+      liveFreshTtlMs: LIVE_FRESH_TTL_MS,
+      liveStaleTtlMs: LIVE_STALE_TTL_MS,
       monthlyFreshTtls: {
         currentMonthMs: CURRENT_MONTH_FRESH_TTL_MS,
         previousMonthMs: PREVIOUS_MONTH_FRESH_TTL_MS,
@@ -663,6 +725,12 @@ export function getDatesBreakdown(data: any) {
   return {
     hours: normalizeBucketCollection(data?.items?.hours, 0, 23, ["hour", "index", "id"]),
     months: normalizeBucketCollection(data?.items?.months, 1, 12, ["month", "index", "id"]),
+    monthDays: normalizeBucketCollection(
+      data?.items?.monthDays ?? data?.items?.days,
+      1,
+      31,
+      ["monthDay", "dayOfMonth", "day", "index", "id"]
+    ),
     weekDays: normalizeBucketCollection(
       data?.items?.weekDays,
       1,
