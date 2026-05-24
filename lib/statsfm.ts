@@ -9,6 +9,8 @@ const RETRY_DELAY_MS = 300;
 const MAX_RETRIES = 1;
 const LIVE_FRESH_TTL_MS = 20_000;
 const LIVE_STALE_TTL_MS = 45_000;
+const REPLAY_FRESH_TTL_MS = 5 * 60_000;
+const REPLAY_STALE_TTL_MS = 10 * 60_000;
 const CURRENT_MONTH_FRESH_TTL_MS = 5 * 60_000;
 const PREVIOUS_MONTH_FRESH_TTL_MS = 12 * 60 * 60_000;
 const HISTORICAL_MONTH_FRESH_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -21,7 +23,7 @@ export type StatsfmResult = {
 };
 
 type AggregateMode = "auto" | "none";
-type CacheProfile = "default" | "live";
+type CacheProfile = "default" | "live" | "replay";
 
 type StatsfmFetchOptions = {
   force?: boolean;
@@ -189,6 +191,16 @@ function getCacheConfigForOptions(options?: StatsfmFetchOptions): FetchCacheConf
       freshTtlMs: LIVE_FRESH_TTL_MS,
       staleTtlMs: LIVE_STALE_TTL_MS,
       cacheProfile: "live",
+      scope: "path",
+      segmentKind: null,
+    };
+  }
+
+  if (options?.cacheProfile === "replay") {
+    return {
+      freshTtlMs: REPLAY_FRESH_TTL_MS,
+      staleTtlMs: REPLAY_STALE_TTL_MS,
+      cacheProfile: "replay",
       scope: "path",
       segmentKind: null,
     };
@@ -633,6 +645,7 @@ export function getStatsfmHealthSnapshot() {
     }));
   const monthlySegmentEntries = [...cache.entries()].filter(([, entry]) => entry.scope === "monthly_segment");
   const liveEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "live");
+  const replayEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "replay");
   const defaultEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "default");
   const monthlyFreshEntries = monthlySegmentEntries.filter(([, entry]) => entry.expiresAt > timestamp).length;
   const monthlyStaleEntries = monthlySegmentEntries.filter(
@@ -656,6 +669,11 @@ export function getStatsfmHealthSnapshot() {
         total: liveEntries.length,
         fresh: liveEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
         stale: liveEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
+      },
+      replay: {
+        total: replayEntries.length,
+        fresh: replayEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
+        stale: replayEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
       },
     },
     monthlySegments: {

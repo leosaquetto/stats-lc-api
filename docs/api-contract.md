@@ -67,6 +67,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | `/api/stats-cardinality` | `user=<user>`, `after=<epoch ms>`, optional `before=<epoch ms>`, `force=1` | Listening totals plus unique entity counts. | `streams`, `durationMs`, `minutes`, `hours`, and `cardinality.{artists,tracks,albums}`. Uses raw upstream stats for the requested range instead of reconstructing cardinality from monthly blocks. |
 | `/api/stats-dates` | `user=<user>`, `after=<epoch ms>`, optional `before=<epoch ms>`, `force=1` | Time distribution buckets for charts. | Stable zero-filled `hours`, `months`, `weekDays`, and `monthDays` maps. |
 | `/api/top` | `user=<user>`, optional `type=artists|tracks|albums` default `tracks`, `period=today|week|month|all` default `week`, `after=<epoch ms>`, `limit` default `20`, `force=1` | Normalized top artists/tracks/albums. | `items` normalized by `type`; explicit `after` overrides the period-derived range. |
+| `/api/replay` | `userId=<user id>` or `user=<user>`, optional `period=today|week|month|year|all` default `today`, `force=1` | Single payload for the Replay section. | `period`, `totalSongs`, `topArtists` top 20, `topTracks` top 30, and `topAlbums` top 15. Top-list failures are isolated under optional `errors`; stats failure fails the request. |
 | `/api/user-streams` | `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | Stream history page data. | Normalized stream `items` for `/users/:id/streams`. |
 | `/api/user-friends` | `user=<user>`, optional `force=1` | Friends page data. | Normalized friend `items` plus best-effort `count`; count lookup failure is isolated under `errors.count`. |
 
@@ -92,7 +93,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 ### Common response conventions
 
 - Success payloads include `ok: true` and usually include the resolved upstream `endpoint`.
-- Missing or invalid required params return `ok: false` with stable error strings such as `missing_user`, `missing_user_or_after`, `missing_type_or_id`, `missing_params`, `invalid_type`, `missing_users`, `too_many_users`, or `invalid_range`.
+- Missing or invalid required params return `ok: false` with stable error strings such as `missing_user`, `missing_user_or_after`, `missing_type_or_id`, `missing_params`, `invalid_type`, `invalid_period`, `missing_users`, `too_many_users`, or `invalid_range`.
 - Normal endpoint payloads should not expose `statsfmFetch` cache/cooldown/stale metadata. Use `/api/health` or explicit debug surfaces.
 - `debug=1` is intentionally limited to selected endpoints and sanitizes sensitive keys matching token, authorization, cookie, secret, or session.
 

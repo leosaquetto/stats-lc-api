@@ -83,6 +83,11 @@ export function getStartOfMonthSPMs() {
   return zonedMidnightToUtcMs(year, month, 1, SP_TIMEZONE);
 }
 
+export function getStartOfYearSPMs() {
+  const { year } = getDatePartsInTimeZone(new Date(), SP_TIMEZONE);
+  return zonedMidnightToUtcMs(year, 1, 1, SP_TIMEZONE);
+}
+
 export function getMonthRangeSegments(
   startMs: number,
   endMs: number,
