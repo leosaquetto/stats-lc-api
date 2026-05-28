@@ -170,6 +170,55 @@ test("group-live returns lightweight live members with normalized nowPlaying", a
   assert.equal(captured.body.members[0].nowPlaying.platformCandidate.primary, "spotify");
 });
 
+test("group-live uses stream album id to correct live now track album", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.includes("/streams/recent")) {
+      return jsonResponse({
+        items: [
+          {
+            id: "stream-1",
+            albumId: "album-main",
+            endTime: "2026-05-22T22:00:00.000Z",
+            track: {
+              id: "track-1",
+              name: "Live Song",
+              artists: [{ id: "artist-1", name: "Main Artist" }],
+              albums: [{ id: "single-1", name: "Wrong Single" }],
+            },
+          },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/album-main")) {
+      return jsonResponse({
+        item: {
+          id: "album-main",
+          name: "Main Album",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      });
+    }
+
+    return jsonResponse({
+      item: {
+        displayName: "Live User",
+        image: "https://img.test/u.jpg",
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await groupLiveHandler({ query: {} } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.members[0].nowPlaying.track.albumId, "album-main");
+  assert.equal(captured.body.members[0].nowPlaying.track.albumName, "Main Album");
+});
+
 test("entity-group-stats returns per-member stats and tolerates partial failures", async () => {
   let calls = 0;
 

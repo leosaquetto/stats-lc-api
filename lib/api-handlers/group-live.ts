@@ -52,7 +52,12 @@ async function getLiveUserBundle(
   const profileRaw = profileData?.item ?? null;
   const recentData: any = recent.data;
   const recentItems = Array.isArray(recentData?.items)
-    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force, cacheProfile: "live" })
+    ? await enrichTrackItemsWithAlbumOwners(recentData.items, {
+        force,
+        cacheProfile: "live",
+        userId: user.id,
+        useTrackStreamEvidence: true,
+      })
     : [];
   const recentItemRaw = recentItems[0] ?? null;
   const nowPlayingRaw = recentItemRaw ? normalizeRecentItem(recentItemRaw) : null;

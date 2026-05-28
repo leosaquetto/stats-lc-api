@@ -5,6 +5,13 @@ import { enrichTrackItemsWithAlbumOwners } from "./track-album-enrichment.js";
 
 type FetchOptions = NonNullable<Parameters<typeof statsfmFetch>[1]>;
 type StreamEntityType = "tracks" | "artists" | "albums";
+type StreamNormalizeOptions = FetchOptions & {
+  albumItems?: any[];
+  userId?: string;
+  after?: string | number | null;
+  before?: string | number | null;
+  useTrackStreamEvidence?: boolean;
+};
 
 export async function fetchUserStreams(
   userId: string,
@@ -35,7 +42,7 @@ export async function fetchUserEntityStreams(
   );
 }
 
-export async function normalizeStreamItems(data: unknown, options: FetchOptions = {}) {
+export async function normalizeStreamItems(data: unknown, options: StreamNormalizeOptions = {}) {
   const items = await enrichTrackItemsWithAlbumOwners(getItems(data), options);
   return items.map(normalizeRecentItem);
 }

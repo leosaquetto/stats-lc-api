@@ -98,7 +98,7 @@ async function getUserBundle(
   const displayName = getDisplayName(profileData, key);
   const profileRaw = profileData?.item ?? null;
   const recentItems = Array.isArray(recentData?.items)
-    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force })
+    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force, userId: user.id })
     : [];
   const topTrackItems = Array.isArray(tracksData?.items)
     ? await enrichTrackItemsWithAlbumOwners(tracksData.items, {

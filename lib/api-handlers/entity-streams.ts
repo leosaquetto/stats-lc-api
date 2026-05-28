@@ -39,6 +39,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     type,
     id,
     endpoint: result.endpoint,
-    items: await normalizeStreamItems(result.data, { force }),
+    items: await normalizeStreamItems(result.data, {
+      force,
+      userId,
+      useTrackStreamEvidence: false,
+    }),
   });
 }

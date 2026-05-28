@@ -9,6 +9,7 @@ import { resolveUserId } from "../users.js";
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = readQueryString(req.query.user);
   const force = req.query.force === "1";
+  const resolveAlbums = req.query.resolveAlbums === "1";
 
   if (!user) {
     return res.status(400).json({ ok: false, error: "missing_user" });
@@ -33,6 +34,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     user,
     userId,
     endpoint: result.endpoint,
-    items: await normalizeStreamItems(result.data, { force }),
+    items: await normalizeStreamItems(result.data, {
+      force,
+      userId,
+      useTrackStreamEvidence: resolveAlbums,
+    }),
   });
 }

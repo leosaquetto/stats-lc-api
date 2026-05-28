@@ -8,6 +8,7 @@ type TrackAlbumEvidenceOptions = FetchOptions & {
   userId?: string;
   after?: number | string | null;
   before?: number | string | null;
+  useTrackStreamEvidence?: boolean;
 };
 
 function readText(value: unknown) {
@@ -23,7 +24,18 @@ function getTrackAlbum(track: any) {
 }
 
 function getTrackId(item: any) {
-  const id = getTrackValue(item)?.id;
+  const streamTrackId = item?.track?.id ?? item?.trackId;
+  if (streamTrackId != null) return String(streamTrackId);
+
+  const looksLikeStreamItem =
+    item?.endTime != null ||
+    item?.playedAt != null ||
+    item?.trackId != null ||
+    item?.albumId != null ||
+    item?.userId != null;
+  if (looksLikeStreamItem) return null;
+
+  const id = item?.id;
   return id == null ? null : String(id);
 }
 
@@ -371,7 +383,13 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
   const sourceItems = Array.isArray(items) ? items : [];
   if (sourceItems.length === 0) return [];
 
-  const trackStreamEvidence = await fetchTrackStreamAlbumEvidence(sourceItems, options);
+  const directStreamAlbumDetails = await fetchDirectStreamAlbumDetails(sourceItems, options);
+  const itemsNeedingTrackStreamEvidence = sourceItems.filter((item: any) => (
+    item?.albumId == null || !directStreamAlbumDetails.has(String(item.albumId))
+  ));
+  const trackStreamEvidence = options.useTrackStreamEvidence === false
+    ? new Map<string, any>()
+    : await fetchTrackStreamAlbumEvidence(itemsNeedingTrackStreamEvidence, options);
   const missingTrackIds = new Set(
     sourceItems
       .map(getTrackId)
@@ -379,9 +397,6 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
   );
   const streamAlbumEvidence = missingTrackIds.size > 0
     ? await fetchStreamAlbumEvidence(sourceItems, options, missingTrackIds)
-    : new Map<string, any>();
-  const directStreamAlbumDetails = trackStreamEvidence.size === 0 && streamAlbumEvidence.size === 0
-    ? await fetchDirectStreamAlbumDetails(sourceItems, options)
     : new Map<string, any>();
 
   const streamEnriched = sourceItems.map((item: any) => {
