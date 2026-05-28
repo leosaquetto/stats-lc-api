@@ -1,4 +1,8 @@
 import { encodeSegment, getItem } from "./api-helpers.js";
+import {
+  applyManualAlbumOverrideToAlbumItem,
+  applyManualAlbumOverrideToTrackItem,
+} from "./album-overrides.js";
 import { enrichTopTracksWithAlbumOwners } from "./normalize.js";
 import { statsfmFetch } from "./statsfm.js";
 
@@ -155,7 +159,9 @@ export async function enrichAlbumItemsWithOwners<T>(
   items: T[],
   options: FetchOptions = {}
 ): Promise<T[]> {
-  const sourceItems = Array.isArray(items) ? items : [];
+  const sourceItems = Array.isArray(items)
+    ? items.map((item) => applyManualAlbumOverrideToAlbumItem(item))
+    : [];
   if (sourceItems.length === 0) return [];
 
   const albumIds = [
@@ -190,7 +196,9 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
   items: T[],
   options: FetchOptions & { albumItems?: any[] } = {}
 ): Promise<T[]> {
-  const sourceItems = Array.isArray(items) ? items : [];
+  const sourceItems = Array.isArray(items)
+    ? items.map((item) => applyManualAlbumOverrideToTrackItem(item))
+    : [];
   if (sourceItems.length === 0) return [];
 
   const lookupEnriched = options.albumItems

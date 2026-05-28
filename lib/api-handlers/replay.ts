@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { buildQuery, encodeSegment, getItems, readQueryString } from "../api-helpers.js";
 import { normalizeTopItem } from "../normalize.js";
-import { getCount, statsfmFetch } from "../statsfm.js";
+import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
@@ -122,6 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? await normalizeTopItems(topTracks.data, "tracks", { force, albumItems: topAlbumsRaw })
     : [];
   const normalizedTopAlbums = topAlbums.ok ? await normalizeTopItems(topAlbums.data, "albums") : [];
+  const totalDurationMs = getDurationMs(stats.data);
 
   res.status(200).json({
     ok: true,
@@ -130,6 +131,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     period,
     after,
     totalSongs: getCount(stats.data),
+    totalDurationMs,
+    durationMs: totalDurationMs,
+    minutes: Math.floor(totalDurationMs / 60000),
+    hours: Math.floor(totalDurationMs / 3600000),
     topArtists: normalizedTopArtists,
     topTracks: normalizedTopTracks,
     topAlbums: normalizedTopAlbums,

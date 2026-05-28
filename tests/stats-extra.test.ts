@@ -3,8 +3,13 @@ import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
 import entityGroupStatsHandler from "../lib/api-handlers/entity-group-stats.ts";
 import groupLiveHandler from "../lib/api-handlers/group-live.ts";
+import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
+import {
+  ALBUM_OVERRIDES_BY_ALBUM_ID,
+  ALBUM_OVERRIDES_BY_TRACK_ID,
+} from "../lib/album-overrides.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import {
   enrichAlbumItemsWithOwners,
@@ -20,6 +25,8 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   __resetStatsfmStateForTests();
+  for (const key of Object.keys(ALBUM_OVERRIDES_BY_ALBUM_ID)) delete ALBUM_OVERRIDES_BY_ALBUM_ID[key];
+  for (const key of Object.keys(ALBUM_OVERRIDES_BY_TRACK_ID)) delete ALBUM_OVERRIDES_BY_TRACK_ID[key];
 });
 
 function createResponseCapture() {
@@ -313,4 +320,67 @@ test("ownerless albums infer primary artist from album tracks", async () => {
   const album = normalizeTopItem(item, "albums") as any;
   assert.equal(album.artistName, "Main Artist");
   assert.equal(album.primaryArtistName, "Main Artist");
+});
+
+test("replay exposes real total duration from stats", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/streams/stats")) {
+      return jsonResponse({
+        items: {
+          count: 42,
+          durationMs: 12_345_678,
+        },
+      });
+    }
+
+    if (url.pathname.endsWith("/top/artists")) return jsonResponse({ items: [] });
+    if (url.pathname.endsWith("/top/tracks")) return jsonResponse({ items: [] });
+    if (url.pathname.endsWith("/top/albums")) return jsonResponse({ items: [] });
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await replayHandler({
+    query: {
+      user: "leo",
+      period: "month",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.totalSongs, 42);
+  assert.equal(captured.body.totalDurationMs, 12_345_678);
+  assert.equal(captured.body.durationMs, 12_345_678);
+  assert.equal(captured.body.minutes, 205);
+});
+
+test("manual album override replaces track album before normalization", async () => {
+  ALBUM_OVERRIDES_BY_ALBUM_ID["single-1"] = {
+    id: "album-main",
+    name: "Main Album",
+    artist: { id: "artist-1", name: "Main Artist" },
+    image: "https://img.test/main.jpg",
+  };
+
+  const [item] = await enrichTrackItemsWithAlbumOwners([
+    {
+      track: {
+        id: "track-1",
+        name: "Song From Single",
+        artists: [{ id: "artist-1", name: "Main Artist" }],
+        albums: [{ id: "single-1", name: "Wrong Single", image: "https://img.test/single.jpg" }],
+      },
+    },
+  ]);
+
+  const track = normalizeTopItem(item, "tracks") as any;
+  assert.equal(track.albumId, "album-main");
+  assert.equal(track.albumName, "Main Album");
+  assert.equal(track.album.primaryArtistName, "Main Artist");
+  assert.equal(track.album.rawAvailableKeys.includes("manualAlbumOverride"), true);
+  assert.equal(track.album.rawAvailableKeys.includes("sourceAlbumId"), true);
 });
