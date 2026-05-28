@@ -101,6 +101,8 @@ async function getUserBundle(
     ? await enrichTrackItemsWithAlbumOwners(tracksData.items, {
         force,
         albumItems: Array.isArray(albumsData?.items) ? albumsData.items : [],
+        userId: user.id,
+        after: afterWeek,
       })
     : [];
   const topAlbumItems = Array.isArray(albumsData?.items)

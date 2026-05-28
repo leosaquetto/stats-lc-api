@@ -39,6 +39,8 @@ function getAfterFromPeriod(period: ReplayPeriod) {
 async function normalizeTopItems(data: unknown, type: ReplayTopType, options: {
   force?: boolean;
   albumItems?: any[];
+  userId?: string;
+  after?: number;
 } = {}) {
   const items = getItems(data);
   const enrichedItems = type === "tracks"
@@ -46,6 +48,8 @@ async function normalizeTopItems(data: unknown, type: ReplayTopType, options: {
         force: options.force,
         cacheProfile: "replay",
         albumItems: options.albumItems,
+        userId: options.userId,
+        after: options.after,
       })
     : type === "albums"
       ? await enrichAlbumItemsWithOwners(items, {
@@ -119,7 +123,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const topAlbumsRaw = topAlbums.ok ? getItems(topAlbums.data) : [];
   const normalizedTopArtists = topArtists.ok ? await normalizeTopItems(topArtists.data, "artists") : [];
   const normalizedTopTracks = topTracks.ok
-    ? await normalizeTopItems(topTracks.data, "tracks", { force, albumItems: topAlbumsRaw })
+    ? await normalizeTopItems(topTracks.data, "tracks", { force, albumItems: topAlbumsRaw, userId, after })
     : [];
   const normalizedTopAlbums = topAlbums.ok ? await normalizeTopItems(topAlbums.data, "albums") : [];
   const totalDurationMs = getDurationMs(stats.data);

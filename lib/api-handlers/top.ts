@@ -63,6 +63,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? await enrichTrackItemsWithAlbumOwners(rawItems, {
         force,
         albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
+        userId,
+        after,
       })
     : type === "albums"
       ? await enrichAlbumItemsWithOwners(rawItems, { force })

@@ -1,12 +1,14 @@
 import { encodeSegment, getItem } from "./api-helpers.js";
-import {
-  applyManualAlbumOverrideToAlbumItem,
-  applyManualAlbumOverrideToTrackItem,
-} from "./album-overrides.js";
 import { enrichTopTracksWithAlbumOwners } from "./normalize.js";
 import { statsfmFetch } from "./statsfm.js";
 
 type FetchOptions = NonNullable<Parameters<typeof statsfmFetch>[1]>;
+type TrackAlbumEvidenceOptions = FetchOptions & {
+  albumItems?: any[];
+  userId?: string;
+  after?: number | string | null;
+  before?: number | string | null;
+};
 
 function readText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -18,6 +20,11 @@ function getTrackValue(item: any) {
 
 function getTrackAlbum(track: any) {
   return track?.albums?.[0] ?? track?.album ?? null;
+}
+
+function getTrackId(item: any) {
+  const id = getTrackValue(item)?.id;
+  return id == null ? null : String(id);
 }
 
 function hasMultipleArtists(track: any) {
@@ -85,6 +92,53 @@ function albumValue(item: any) {
   return item?.album ?? item;
 }
 
+function albumForTrackReplacement(item: any) {
+  const album = albumValue(item);
+  return album && typeof album === "object" ? album : null;
+}
+
+function mergeAlbumIntoTrackItem<T>(item: T, album: any): T {
+  const track = getTrackValue(item);
+  const replacement = albumForTrackReplacement(album);
+  if (!track || !replacement) return item;
+
+  const currentAlbums = Array.isArray(track?.albums) ? track.albums : [];
+  const enrichedTrack = {
+    ...track,
+    album: replacement,
+    albums: [replacement, ...currentAlbums.filter((entry: any) => String(entry?.id) !== String(replacement.id))],
+    albumId: replacement.id ?? track?.albumId ?? null,
+    albumName: replacement.name ?? track?.albumName ?? null,
+    albumImage: replacement.image ?? track?.albumImage ?? null,
+    albumArtist: replacement.artist ?? replacement.primaryArtist ?? replacement.artists?.[0] ?? track?.albumArtist ?? null,
+    albumArtistId:
+      replacement.artistId ??
+      replacement.primaryArtistId ??
+      replacement.artist?.id ??
+      replacement.primaryArtist?.id ??
+      replacement.artists?.[0]?.id ??
+      track?.albumArtistId ??
+      null,
+    albumArtistName:
+      replacement.artistName ??
+      replacement.primaryArtistName ??
+      replacement.artist?.name ??
+      replacement.primaryArtist?.name ??
+      replacement.artists?.[0]?.name ??
+      track?.albumArtistName ??
+      null,
+  };
+
+  if ((item as any)?.track) {
+    return {
+      ...(item as any),
+      track: enrichedTrack,
+    };
+  }
+
+  return enrichedTrack as T;
+}
+
 function needsAlbumOwnerDetail(item: any) {
   const track = getTrackValue(item);
   if (!hasMultipleArtists(track)) return false;
@@ -129,6 +183,126 @@ async function fetchAlbumDetails(albumIds: string[], options: FetchOptions) {
   );
 }
 
+async function fetchStreamAlbumEvidence(
+  items: any[],
+  options: TrackAlbumEvidenceOptions,
+  wantedTrackIds = new Set(items.map(getTrackId).filter(Boolean) as string[])
+) {
+  if (!options.userId || !Array.isArray(options.albumItems) || options.albumItems.length === 0) {
+    return new Map<string, any>();
+  }
+
+  if (wantedTrackIds.size === 0) return new Map<string, any>();
+
+  const candidates = options.albumItems
+    .map((item) => albumForTrackReplacement(item))
+    .filter((album) => album && albumIdForDetail(album));
+  const albumIds = [...new Set(candidates.map((album) => albumIdForDetail(album)).filter(Boolean))] as string[];
+  if (albumIds.length === 0) return new Map<string, any>();
+
+  const albumById = new Map(candidates.map((album) => [String(album.id), album]));
+  const evidence = new Map<string, any>();
+
+  await Promise.all(
+    albumIds.map(async (albumId) => {
+      const query = new URLSearchParams({ limit: "200" });
+      if (options.after != null && options.after !== "") query.set("after", String(options.after));
+      if (options.before != null && options.before !== "") query.set("before", String(options.before));
+
+      const result = await statsfmFetch(
+        `/users/${encodeSegment(options.userId!)}/streams/albums/${encodeSegment(albumId)}?${query.toString()}`,
+        {
+          force: options.force,
+          cacheProfile: options.cacheProfile,
+        }
+      );
+      if (!result.ok) return;
+
+      const album = albumById.get(albumId);
+      for (const stream of Array.isArray((result.data as any)?.items) ? (result.data as any).items : []) {
+        const trackId = stream?.trackId == null ? null : String(stream.trackId);
+        if (!trackId || !wantedTrackIds.has(trackId) || evidence.has(trackId)) continue;
+        evidence.set(trackId, album);
+      }
+    })
+  );
+
+  return evidence;
+}
+
+async function fetchTrackStreamAlbumEvidence(
+  items: any[],
+  options: TrackAlbumEvidenceOptions
+) {
+  if (!options.userId) return new Map<string, any>();
+
+  const trackIds = [...new Set(items.map(getTrackId).filter(Boolean) as string[])];
+  if (trackIds.length === 0) return new Map<string, any>();
+
+  const albumIdByTrackId = new Map<string, string>();
+
+  await Promise.all(
+    trackIds.map(async (trackId) => {
+      const query = new URLSearchParams({ limit: "50" });
+      if (options.after != null && options.after !== "") query.set("after", String(options.after));
+      if (options.before != null && options.before !== "") query.set("before", String(options.before));
+
+      const result = await statsfmFetch(
+        `/users/${encodeSegment(options.userId!)}/streams/tracks/${encodeSegment(trackId)}?${query.toString()}`,
+        {
+          force: options.force,
+          cacheProfile: options.cacheProfile,
+        }
+      );
+      if (!result.ok) return;
+
+      const counts = new Map<string, number>();
+      for (const stream of Array.isArray((result.data as any)?.items) ? (result.data as any).items : []) {
+        const albumId = stream?.albumId == null ? null : String(stream.albumId);
+        if (!albumId) continue;
+        counts.set(albumId, (counts.get(albumId) ?? 0) + 1);
+      }
+
+      const winner = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (winner) albumIdByTrackId.set(trackId, winner);
+    })
+  );
+
+  const albumIds = [...new Set(albumIdByTrackId.values())];
+  const albums = await fetchAlbumDetails(albumIds, options);
+  const albumById = new Map(albums.filter(Boolean).map((album: any) => [String(album.id), album]));
+  const evidence = new Map<string, any>();
+
+  for (const [trackId, albumId] of albumIdByTrackId) {
+    const album = albumById.get(albumId);
+    if (album) evidence.set(trackId, album);
+  }
+
+  return evidence;
+}
+
+async function fetchDirectStreamAlbumDetails(
+  items: any[],
+  options: FetchOptions
+) {
+  const albumIds = [
+    ...new Set(
+      items
+        .map((item: any) => item?.albumId)
+        .filter((id: unknown) => id != null)
+        .map(String)
+    ),
+  ];
+  if (albumIds.length === 0) return new Map<string, any>();
+
+  const albums = await fetchAlbumDetails(albumIds, options);
+  return new Map(
+    albums
+      .filter(Boolean)
+      .map((album: any) => [String(album.id), album])
+  );
+}
+
 function mergeAlbumOwner<T>(item: T, detail: any): T {
   const album = albumValue(item);
   const owner = detail?.artists?.[0] ?? detail?.artist ?? detail?.primaryArtist ?? null;
@@ -159,9 +333,7 @@ export async function enrichAlbumItemsWithOwners<T>(
   items: T[],
   options: FetchOptions = {}
 ): Promise<T[]> {
-  const sourceItems = Array.isArray(items)
-    ? items.map((item) => applyManualAlbumOverrideToAlbumItem(item))
-    : [];
+  const sourceItems = Array.isArray(items) ? items : [];
   if (sourceItems.length === 0) return [];
 
   const albumIds = [
@@ -194,16 +366,36 @@ export async function enrichAlbumItemsWithOwners<T>(
 
 export async function enrichTrackItemsWithAlbumOwners<T>(
   items: T[],
-  options: FetchOptions & { albumItems?: any[] } = {}
+  options: TrackAlbumEvidenceOptions = {}
 ): Promise<T[]> {
-  const sourceItems = Array.isArray(items)
-    ? items.map((item) => applyManualAlbumOverrideToTrackItem(item))
-    : [];
+  const sourceItems = Array.isArray(items) ? items : [];
   if (sourceItems.length === 0) return [];
 
+  const trackStreamEvidence = await fetchTrackStreamAlbumEvidence(sourceItems, options);
+  const missingTrackIds = new Set(
+    sourceItems
+      .map(getTrackId)
+      .filter((trackId): trackId is string => Boolean(trackId) && !trackStreamEvidence.has(trackId))
+  );
+  const streamAlbumEvidence = missingTrackIds.size > 0
+    ? await fetchStreamAlbumEvidence(sourceItems, options, missingTrackIds)
+    : new Map<string, any>();
+  const directStreamAlbumDetails = trackStreamEvidence.size === 0 && streamAlbumEvidence.size === 0
+    ? await fetchDirectStreamAlbumDetails(sourceItems, options)
+    : new Map<string, any>();
+
+  const streamEnriched = sourceItems.map((item: any) => {
+    const trackId = getTrackId(item);
+    const albumFromTrackStreams = trackId ? trackStreamEvidence.get(trackId) : null;
+    const albumFromTopAlbumStreams = trackId ? streamAlbumEvidence.get(trackId) : null;
+    const albumFromStreamRow = item?.albumId == null ? null : directStreamAlbumDetails.get(String(item.albumId));
+    const album = albumFromTrackStreams ?? albumFromTopAlbumStreams ?? albumFromStreamRow;
+    return album ? mergeAlbumIntoTrackItem(item, album) : item;
+  });
+
   const lookupEnriched = options.albumItems
-    ? enrichTopTracksWithAlbumOwners(sourceItems, options.albumItems)
-    : sourceItems;
+    ? enrichTopTracksWithAlbumOwners(streamEnriched, options.albumItems)
+    : streamEnriched;
 
   const albumIds = [
     ...new Set(

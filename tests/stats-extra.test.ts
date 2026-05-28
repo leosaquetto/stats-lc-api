@@ -6,10 +6,6 @@ import groupLiveHandler from "../lib/api-handlers/group-live.ts";
 import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
-import {
-  ALBUM_OVERRIDES_BY_ALBUM_ID,
-  ALBUM_OVERRIDES_BY_TRACK_ID,
-} from "../lib/album-overrides.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import {
   enrichAlbumItemsWithOwners,
@@ -25,8 +21,6 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   __resetStatsfmStateForTests();
-  for (const key of Object.keys(ALBUM_OVERRIDES_BY_ALBUM_ID)) delete ALBUM_OVERRIDES_BY_ALBUM_ID[key];
-  for (const key of Object.keys(ALBUM_OVERRIDES_BY_TRACK_ID)) delete ALBUM_OVERRIDES_BY_TRACK_ID[key];
 });
 
 function createResponseCapture() {
@@ -358,12 +352,25 @@ test("replay exposes real total duration from stats", async () => {
   assert.equal(captured.body.minutes, 205);
 });
 
-test("manual album override replaces track album before normalization", async () => {
-  ALBUM_OVERRIDES_BY_ALBUM_ID["single-1"] = {
-    id: "album-main",
-    name: "Main Album",
-    artist: { id: "artist-1", name: "Main Artist" },
-    image: "https://img.test/main.jpg",
+test("stream album evidence replaces top track album before normalization", async () => {
+  const requestedPaths: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    requestedPaths.push(url.pathname);
+
+    if (url.pathname.endsWith("/users/user-1/streams/albums/album-main")) {
+      return jsonResponse({
+        items: [
+          {
+            trackId: "track-1",
+            albumId: "album-main",
+            trackName: "Song From Album",
+          },
+        ],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
   };
 
   const [item] = await enrichTrackItemsWithAlbumOwners([
@@ -375,12 +382,106 @@ test("manual album override replaces track album before normalization", async ()
         albums: [{ id: "single-1", name: "Wrong Single", image: "https://img.test/single.jpg" }],
       },
     },
-  ]);
+  ], {
+    userId: "user-1",
+    after: 1000,
+    albumItems: [
+      {
+        album: {
+          id: "album-main",
+          name: "Main Album",
+          image: "https://img.test/main.jpg",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      },
+    ],
+  });
 
   const track = normalizeTopItem(item, "tracks") as any;
   assert.equal(track.albumId, "album-main");
   assert.equal(track.albumName, "Main Album");
   assert.equal(track.album.primaryArtistName, "Main Artist");
-  assert.equal(track.album.rawAvailableKeys.includes("manualAlbumOverride"), true);
-  assert.equal(track.album.rawAvailableKeys.includes("sourceAlbumId"), true);
+  assert.equal(requestedPaths.includes("/api/v1/users/user-1/streams/albums/album-main"), true);
+});
+
+test("track stream evidence can replace top track album without top album match", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/users/user-1/streams/tracks/track-1")) {
+      return jsonResponse({
+        items: [
+          { trackId: "track-1", albumId: "album-main" },
+          { trackId: "track-1", albumId: "album-main" },
+          { trackId: "track-1", albumId: "single-1" },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/album-main")) {
+      return jsonResponse({
+        item: {
+          id: "album-main",
+          name: "Main Album",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [item] = await enrichTrackItemsWithAlbumOwners([
+    {
+      track: {
+        id: "track-1",
+        name: "Song From Single",
+        artists: [{ id: "artist-1", name: "Main Artist" }],
+        albums: [{ id: "single-1", name: "Wrong Single" }],
+      },
+    },
+  ], {
+    userId: "user-1",
+    after: 1000,
+    albumItems: [],
+  });
+
+  const track = normalizeTopItem(item, "tracks") as any;
+  assert.equal(track.albumId, "album-main");
+  assert.equal(track.albumName, "Main Album");
+});
+
+test("stream row album id replaces recent track album with album detail", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/albums/album-main")) {
+      return jsonResponse({
+        item: {
+          id: "album-main",
+          name: "Main Album",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [item] = await enrichTrackItemsWithAlbumOwners([
+    {
+      albumId: "album-main",
+      track: {
+        id: "track-1",
+        name: "Song From Single",
+        artists: [{ id: "artist-1", name: "Main Artist" }],
+        albums: [{ id: "single-1", name: "Wrong Single" }],
+      },
+    },
+  ], { cacheProfile: "live" });
+
+  const track = normalizeTopItem(item, "tracks") as any;
+  assert.equal(track.albumId, "album-main");
+  assert.equal(track.albumName, "Main Album");
+  assert.equal(track.album.primaryArtistName, "Main Artist");
 });
