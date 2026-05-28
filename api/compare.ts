@@ -8,7 +8,10 @@ import {
   normalizeTrack,
   normalizeUserSummary,
 } from "../lib/normalize.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import {
+  enrichAlbumItemsWithOwners,
+  enrichTrackItemsWithAlbumOwners,
+} from "../lib/track-album-enrichment.js";
 import {
   getCardinality,
   getCount,
@@ -317,6 +320,9 @@ async function fetchUserComparisonData(
   const lastStreamItems: any[] = lastStreams.ok
     ? await enrichTrackItemsWithAlbumOwners(getItems(lastStreams.data), { force })
     : [];
+  const topAlbumItems: any[] = topAlbums.ok
+    ? await enrichAlbumItemsWithOwners(getItems(topAlbums.data), { force })
+    : [];
 
   return {
     input: user,
@@ -332,7 +338,7 @@ async function fetchUserComparisonData(
     tops: {
       tracks: topTrackItems.map((item) => normalizeStreamItemForKind(item, "tracks")),
       artists: topArtists.ok ? getItems(topArtists.data).map((item: any) => normalizeStreamItemForKind(item, "artists")) : [],
-      albums: topAlbums.ok ? getItems(topAlbums.data).map((item: any) => normalizeStreamItemForKind(item, "albums")) : [],
+      albums: topAlbumItems.map((item: any) => normalizeStreamItemForKind(item, "albums")),
       genres: topGenres.ok ? getItems(topGenres.data).map(normalizeGenreItem) : [],
     },
     time: dates.ok ? getDatesBreakdown(dates.data) : null,

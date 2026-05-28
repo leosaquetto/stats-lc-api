@@ -7,7 +7,10 @@ import {
   normalizeUserSummary,
 } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import {
+  enrichAlbumItemsWithOwners,
+  enrichTrackItemsWithAlbumOwners,
+} from "../lib/track-album-enrichment.js";
 
 function getSearchType(item: any) {
   return item?.type ?? item?.item?.type ?? null;
@@ -15,6 +18,10 @@ function getSearchType(item: any) {
 
 function isSearchTrack(item: any) {
   return getSearchType(item) === "track" || item?.track;
+}
+
+function isSearchAlbum(item: any) {
+  return getSearchType(item) === "album" || item?.album;
 }
 
 function normalizeSearchItem(item: any) {
@@ -69,13 +76,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     rawItems.filter(isSearchTrack).map((item: any) => item?.track ?? item?.item ?? item),
     { force }
   );
+  const enrichedAlbums = await enrichAlbumItemsWithOwners(
+    rawItems.filter(isSearchAlbum).map((item: any) => item?.album ?? item?.item ?? item),
+    { force }
+  );
   let enrichedTrackIndex = 0;
+  let enrichedAlbumIndex = 0;
   const items = rawItems.map((item: any) => {
-    if (!isSearchTrack(item)) return item;
-    const enrichedTrack = enrichedTracks[enrichedTrackIndex++];
-    if (item?.track) return { ...item, track: enrichedTrack };
-    if (item?.item) return { ...item, item: enrichedTrack };
-    return enrichedTrack;
+    if (isSearchTrack(item)) {
+      const enrichedTrack = enrichedTracks[enrichedTrackIndex++];
+      if (item?.track) return { ...item, track: enrichedTrack };
+      if (item?.item) return { ...item, item: enrichedTrack };
+      return enrichedTrack;
+    }
+
+    if (isSearchAlbum(item)) {
+      const enrichedAlbum = enrichedAlbums[enrichedAlbumIndex++];
+      if (item?.album) return { ...item, album: enrichedAlbum };
+      if (item?.item) return { ...item, item: enrichedAlbum };
+      return enrichedAlbum;
+    }
+
+    return item;
   });
 
   res.status(200).json({

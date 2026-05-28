@@ -2,7 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { buildQuery, encodeSegment, getItems, readQueryString } from "../lib/api-helpers.js";
 import { normalizeTopItem } from "../lib/normalize.js";
 import { getCount, statsfmFetch } from "../lib/statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import {
+  enrichAlbumItemsWithOwners,
+  enrichTrackItemsWithAlbumOwners,
+} from "../lib/track-album-enrichment.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -44,7 +47,12 @@ async function normalizeTopItems(data: unknown, type: ReplayTopType, options: {
         cacheProfile: "replay",
         albumItems: options.albumItems,
       })
-    : items;
+    : type === "albums"
+      ? await enrichAlbumItemsWithOwners(items, {
+          force: options.force,
+          cacheProfile: "replay",
+        })
+      : items;
 
   return enrichedItems.map((item: any) => normalizeTopItem(item, type));
 }

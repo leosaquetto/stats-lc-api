@@ -152,4 +152,4 @@ Normalized tracks keep their existing fields and additionally expose primary-art
 - `track.primaryArtistName`
 - `track.secondaryArtists`
 
-Primary artist selection prefers the album owner when it matches a track artist, then explicit primary/main artist markers from the raw payload, then the first track artist. When multi-artist tracks arrive with an album object that has no owner, track-returning endpoints enrich the album from available top-album data or album detail before normalization. Normalized albums also expose `primaryArtist`, `primaryArtistId`, and `primaryArtistName`.
+Primary artist selection prefers the album owner when it matches a track artist, then explicit primary/main artist markers from the raw payload, then the first track artist. When multi-artist tracks arrive with an album object that has no owner, track-returning endpoints enrich the album from available top-album data or album detail before normalization. Album-returning endpoints also enrich ownerless albums from album detail before normalization. Normalized albums expose `artist`, `artistId`, `artistName`, `primaryArtist`, `primaryArtistId`, and `primaryArtistName`.

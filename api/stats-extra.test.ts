@@ -6,7 +6,10 @@ import groupLiveHandler from "./group-live.ts";
 import statsCardinalityHandler from "./stats-cardinality.ts";
 import statsDatesHandler from "./stats-dates.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.ts";
+import {
+  enrichAlbumItemsWithOwners,
+  enrichTrackItemsWithAlbumOwners,
+} from "../lib/track-album-enrichment.ts";
 import {
   __resetStatsfmStateForTests,
   __setStatsfmNowForTests,
@@ -261,4 +264,53 @@ test("multi-artist top tracks use album detail owner before first track artist",
   assert.equal(track.primaryArtistName, "Anitta");
   assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.name), ["Los Brasileros"]);
   assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/album-1")), true);
+});
+
+test("ownerless albums infer primary artist from album tracks", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/albums/album-1")) {
+      return jsonResponse({
+        item: {
+          id: "album-1",
+          name: "Ownerless Album",
+          artists: [],
+        },
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/album-1/tracks")) {
+      return jsonResponse({
+        items: [
+          { name: "A", artists: [{ id: "main", name: "Main Artist" }] },
+          { name: "B", artists: [{ id: "main", name: "Main Artist" }] },
+          {
+            name: "C",
+            artists: [
+              { id: "guest", name: "Guest Artist" },
+              { id: "main", name: "Main Artist" },
+            ],
+          },
+        ],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [item] = await enrichAlbumItemsWithOwners([
+    {
+      position: 1,
+      album: {
+        id: "album-1",
+        name: "Ownerless Album",
+        artists: [],
+      },
+    },
+  ]);
+
+  const album = normalizeTopItem(item, "albums") as any;
+  assert.equal(album.artistName, "Main Artist");
+  assert.equal(album.primaryArtistName, "Main Artist");
 });

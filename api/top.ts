@@ -2,7 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../lib/users.js";
 import { statsfmFetch } from "../lib/statsfm.js";
 import { normalizeTopItem } from "../lib/normalize.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import {
+  enrichAlbumItemsWithOwners,
+  enrichTrackItemsWithAlbumOwners,
+} from "../lib/track-album-enrichment.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();
@@ -61,7 +64,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         force,
         albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
       })
-    : rawItems;
+    : type === "albums"
+      ? await enrichAlbumItemsWithOwners(rawItems, { force })
+      : rawItems;
 
   res.status(200).json({
     ok: true,

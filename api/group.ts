@@ -11,7 +11,10 @@ import {
   normalizeRecentItem,
   normalizeTopItem,
 } from "../lib/normalize.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import {
+  enrichAlbumItemsWithOwners,
+  enrichTrackItemsWithAlbumOwners,
+} from "../lib/track-album-enrichment.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -99,6 +102,9 @@ async function getUserBundle(
         force,
         albumItems: Array.isArray(albumsData?.items) ? albumsData.items : [],
       })
+    : [];
+  const topAlbumItems = Array.isArray(albumsData?.items)
+    ? await enrichAlbumItemsWithOwners(albumsData.items, { force })
     : [];
   const recentItemRaw: any = recentItems[0] ?? null;
 
@@ -201,9 +207,7 @@ async function getUserBundle(
         ? artistsData.items.map((item: any) => normalizeTopItem(item, "artists"))
         : [],
       tracks: topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")),
-      albums: Array.isArray(albumsData?.items)
-        ? albumsData.items.map((item: any) => normalizeTopItem(item, "albums"))
-        : [],
+      albums: topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")),
     },
 
     ...(debugData ? { debug: debugData } : {}),
