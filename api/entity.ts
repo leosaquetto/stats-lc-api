@@ -8,6 +8,7 @@ import {
 } from "../lib/api-helpers.js";
 import { normalizeEntity } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const type = readEntityType(req.query.type);
@@ -26,11 +27,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const rawEntity = getItem(result.data);
+  const entity = type === "track"
+    ? (await enrichTrackItemsWithAlbumOwners([rawEntity], { force }))[0]
+    : rawEntity;
+
   res.status(200).json({
     ok: true,
     type,
     id,
     endpoint: result.endpoint,
-    entity: normalizeEntity(getItem(result.data), type),
+    entity: normalizeEntity(entity, type),
   });
 }

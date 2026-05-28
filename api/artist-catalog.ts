@@ -8,6 +8,7 @@ import {
 } from "../lib/api-helpers.js";
 import { normalizeAlbum, normalizeArtist, normalizeTrack } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 
 const SECTION_PATHS = {
   tracks: "tracks",
@@ -59,11 +60,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const rawItems = getItems(result.data);
+  const items = section === "tracks" || section === "top-tracks"
+    ? await enrichTrackItemsWithAlbumOwners(rawItems, { force })
+    : rawItems;
+
   res.status(200).json({
     ok: true,
     id,
     section,
     endpoint: result.endpoint,
-    items: getItems(result.data).map((item: any) => normalizeSectionItem(item, section)),
+    items: items.map((item: any) => normalizeSectionItem(item, section)),
   });
 }

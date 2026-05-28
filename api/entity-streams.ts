@@ -10,6 +10,7 @@ import {
 } from "../lib/api-helpers.js";
 import { normalizeRecentItem } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 import { resolveUserId } from "../lib/users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -39,6 +40,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const items = await enrichTrackItemsWithAlbumOwners(getItems(result.data), { force });
+
   res.status(200).json({
     ok: true,
     user,
@@ -46,6 +49,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     type,
     id,
     endpoint: result.endpoint,
-    items: getItems(result.data).map(normalizeRecentItem),
+    items: items.map(normalizeRecentItem),
   });
 }

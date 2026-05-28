@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../lib/users.js";
 import { statsfmFetch } from "../lib/statsfm.js";
 import { normalizeRecentItem } from "../lib/normalize.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -25,14 +26,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const data: any = result.data;
+  const items = Array.isArray(data?.items)
+    ? await enrichTrackItemsWithAlbumOwners(data.items, { force })
+    : [];
 
   res.status(200).json({
     ok: true,
     user,
     userId,
     endpoint: result.endpoint,
-    items: Array.isArray(data?.items)
-      ? data.items.map(normalizeRecentItem)
-      : []
+    items: items.map(normalizeRecentItem)
   });
 }

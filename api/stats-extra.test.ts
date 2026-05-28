@@ -5,7 +5,8 @@ import entityGroupStatsHandler from "./entity-group-stats.ts";
 import groupLiveHandler from "./group-live.ts";
 import statsCardinalityHandler from "./stats-cardinality.ts";
 import statsDatesHandler from "./stats-dates.ts";
-import { normalizeTrack } from "../lib/normalize.ts";
+import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.ts";
 import {
   __resetStatsfmStateForTests,
   __setStatsfmNowForTests,
@@ -219,4 +220,45 @@ test("normalizeTrack exposes album-owned primary artist and secondary artists", 
   assert.equal(track.primaryArtistId, "main");
   assert.equal(track.primaryArtistName, "Main Artist");
   assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.id), ["guest"]);
+});
+
+test("multi-artist top tracks use album detail owner before first track artist", async () => {
+  const urls: URL[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    urls.push(url);
+
+    if (url.pathname.endsWith("/albums/album-1")) {
+      return jsonResponse({
+        item: {
+          id: "album-1",
+          name: "EQUILIBRIVM",
+          artists: [{ id: "anitta", name: "Anitta" }],
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [item] = await enrichTrackItemsWithAlbumOwners([
+    {
+      position: 1,
+      streams: 10,
+      track: {
+        id: "track-1",
+        name: "Meia Noite",
+        artists: [
+          { id: "los", name: "Los Brasileros" },
+          { id: "anitta", name: "Anitta" },
+        ],
+        albums: [{ id: "album-1", name: "EQUILIBRIVM" }],
+      },
+    },
+  ]);
+
+  const track: any = normalizeTopItem(item, "tracks");
+  assert.equal(track.primaryArtistName, "Anitta");
+  assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.name), ["Los Brasileros"]);
+  assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/album-1")), true);
 });

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../lib/users.js";
 import { statsfmFetch } from "../lib/statsfm.js";
 import { normalizeTopItem } from "../lib/normalize.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();
@@ -51,6 +52,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const data: any = result.data;
+  const albumResult = type === "tracks"
+    ? await statsfmFetch(`/users/${userId}/top/albums?after=${after}&limit=${limit}`, { force })
+    : null;
+  const rawItems = Array.isArray(data?.items) ? data.items : [];
+  const items = type === "tracks"
+    ? await enrichTrackItemsWithAlbumOwners(rawItems, {
+        force,
+        albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
+      })
+    : rawItems;
 
   res.status(200).json({
     ok: true,
@@ -60,8 +71,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     period,
     after,
     endpoint: result.endpoint,
-    items: Array.isArray(data?.items)
-      ? data.items.map((item: any) => normalizeTopItem(item, type))
-      : []
+    items: items.map((item: any) => normalizeTopItem(item, type))
   });
 }

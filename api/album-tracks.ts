@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { encodeSegment, getItems, readQueryString } from "../lib/api-helpers.js";
 import { normalizeTrack } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = readQueryString(req.query.id);
@@ -17,10 +18,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const items = await enrichTrackItemsWithAlbumOwners(getItems(result.data), { force });
+
   res.status(200).json({
     ok: true,
     id,
     endpoint: result.endpoint,
-    items: getItems(result.data).map(normalizeTrack),
+    items: items.map(normalizeTrack),
   });
 }

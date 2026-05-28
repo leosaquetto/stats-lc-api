@@ -7,9 +7,18 @@ import {
   normalizeUserSummary,
 } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+
+function getSearchType(item: any) {
+  return item?.type ?? item?.item?.type ?? null;
+}
+
+function isSearchTrack(item: any) {
+  return getSearchType(item) === "track" || item?.track;
+}
 
 function normalizeSearchItem(item: any) {
-  const type = item?.type ?? item?.item?.type ?? null;
+  const type = getSearchType(item);
   const value = item?.item ?? item;
 
   if (type === "track" || item?.track) {
@@ -55,11 +64,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const rawItems = getItems(result.data);
+  const enrichedTracks = await enrichTrackItemsWithAlbumOwners(
+    rawItems.filter(isSearchTrack).map((item: any) => item?.track ?? item?.item ?? item),
+    { force }
+  );
+  let enrichedTrackIndex = 0;
+  const items = rawItems.map((item: any) => {
+    if (!isSearchTrack(item)) return item;
+    const enrichedTrack = enrichedTracks[enrichedTrackIndex++];
+    if (item?.track) return { ...item, track: enrichedTrack };
+    if (item?.item) return { ...item, item: enrichedTrack };
+    return enrichedTrack;
+  });
+
   res.status(200).json({
     ok: true,
     q,
     type,
     endpoint: result.endpoint,
-    items: getItems(result.data).map(normalizeSearchItem),
+    items: items.map(normalizeSearchItem),
   });
 }

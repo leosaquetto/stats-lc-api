@@ -8,6 +8,7 @@ import {
   normalizeTrack,
   normalizeUserSummary,
 } from "../lib/normalize.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 import {
   getCardinality,
   getCount,
@@ -304,6 +305,18 @@ async function fetchUserComparisonData(
 
   const statsData: any = stats.ok ? stats.data : null;
   const durationMs = getDurationMs(statsData);
+  const topTrackItems: any[] = topTracks.ok
+    ? await enrichTrackItemsWithAlbumOwners(getItems(topTracks.data), {
+        force,
+        albumItems: topAlbums.ok ? getItems(topAlbums.data) : [],
+      })
+    : [];
+  const firstStreamItems: any[] = firstStreams.ok
+    ? await enrichTrackItemsWithAlbumOwners(getItems(firstStreams.data), { force })
+    : [];
+  const lastStreamItems: any[] = lastStreams.ok
+    ? await enrichTrackItemsWithAlbumOwners(getItems(lastStreams.data), { force })
+    : [];
 
   return {
     input: user,
@@ -317,14 +330,14 @@ async function fetchUserComparisonData(
       cardinality: getCardinality(statsData),
     },
     tops: {
-      tracks: topTracks.ok ? getItems(topTracks.data).map((item) => normalizeStreamItemForKind(item, "tracks")) : [],
-      artists: topArtists.ok ? getItems(topArtists.data).map((item) => normalizeStreamItemForKind(item, "artists")) : [],
-      albums: topAlbums.ok ? getItems(topAlbums.data).map((item) => normalizeStreamItemForKind(item, "albums")) : [],
+      tracks: topTrackItems.map((item) => normalizeStreamItemForKind(item, "tracks")),
+      artists: topArtists.ok ? getItems(topArtists.data).map((item: any) => normalizeStreamItemForKind(item, "artists")) : [],
+      albums: topAlbums.ok ? getItems(topAlbums.data).map((item: any) => normalizeStreamItemForKind(item, "albums")) : [],
       genres: topGenres.ok ? getItems(topGenres.data).map(normalizeGenreItem) : [],
     },
     time: dates.ok ? getDatesBreakdown(dates.data) : null,
-    firstStreams: firstStreams.ok ? getItems(firstStreams.data).map(normalizeRecentItem) : [],
-    lastStreams: lastStreams.ok ? getItems(lastStreams.data).map(normalizeRecentItem) : [],
+    firstStreams: firstStreamItems.map(normalizeRecentItem),
+    lastStreams: lastStreamItems.map(normalizeRecentItem),
     errors,
   };
 }

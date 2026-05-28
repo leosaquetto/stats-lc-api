@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { buildQuery, encodeSegment, getItems, readQueryString } from "../lib/api-helpers.js";
 import { normalizeTopItem } from "../lib/normalize.js";
 import { getCount, statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -32,8 +33,20 @@ function getAfterFromPeriod(period: ReplayPeriod) {
   return 0;
 }
 
-function normalizeTopItems(data: unknown, type: ReplayTopType) {
-  return getItems(data).map((item: any) => normalizeTopItem(item, type));
+async function normalizeTopItems(data: unknown, type: ReplayTopType, options: {
+  force?: boolean;
+  albumItems?: any[];
+} = {}) {
+  const items = getItems(data);
+  const enrichedItems = type === "tracks"
+    ? await enrichTrackItemsWithAlbumOwners(items, {
+        force: options.force,
+        cacheProfile: "replay",
+        albumItems: options.albumItems,
+      })
+    : items;
+
+  return enrichedItems.map((item: any) => normalizeTopItem(item, type));
 }
 
 function compactError(result: any) {
@@ -95,6 +108,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!topTracks.ok) errors.topTracks = compactError(topTracks);
   if (!topAlbums.ok) errors.topAlbums = compactError(topAlbums);
 
+  const topAlbumsRaw = topAlbums.ok ? getItems(topAlbums.data) : [];
+  const normalizedTopArtists = topArtists.ok ? await normalizeTopItems(topArtists.data, "artists") : [];
+  const normalizedTopTracks = topTracks.ok
+    ? await normalizeTopItems(topTracks.data, "tracks", { force, albumItems: topAlbumsRaw })
+    : [];
+  const normalizedTopAlbums = topAlbums.ok ? await normalizeTopItems(topAlbums.data, "albums") : [];
+
   res.status(200).json({
     ok: true,
     user: userInput,
@@ -102,9 +122,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     period,
     after,
     totalSongs: getCount(stats.data),
-    topArtists: topArtists.ok ? normalizeTopItems(topArtists.data, "artists") : [],
-    topTracks: topTracks.ok ? normalizeTopItems(topTracks.data, "tracks") : [],
-    topAlbums: topAlbums.ok ? normalizeTopItems(topAlbums.data, "albums") : [],
+    topArtists: normalizedTopArtists,
+    topTracks: normalizedTopTracks,
+    topAlbums: normalizedTopAlbums,
     ...(Object.keys(errors).length > 0 ? { errors } : {}),
   });
 }

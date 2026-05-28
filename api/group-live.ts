@@ -5,6 +5,7 @@ import {
   normalizeRecentItem,
 } from "../lib/normalize.js";
 import { statsfmFetch } from "../lib/statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 
@@ -52,7 +53,10 @@ async function getLiveUserBundle(
   const profileData: any = profile.data;
   const profileRaw = profileData?.item ?? null;
   const recentData: any = recent.data;
-  const recentItemRaw = Array.isArray(recentData?.items) ? recentData.items[0] : null;
+  const recentItems = Array.isArray(recentData?.items)
+    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force, cacheProfile: "live" })
+    : [];
+  const recentItemRaw = recentItems[0] ?? null;
   const nowPlayingRaw = recentItemRaw ? normalizeRecentItem(recentItemRaw) : null;
   const platformDecision = extractUserPlatform(profileRaw, key);
 

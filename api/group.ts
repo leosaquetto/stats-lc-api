@@ -11,6 +11,7 @@ import {
   normalizeRecentItem,
   normalizeTopItem,
 } from "../lib/normalize.js";
+import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -90,17 +91,24 @@ async function getUserBundle(
 
   const displayName = getDisplayName(profileData, key);
   const profileRaw = profileData?.item ?? null;
-  const recentItemRaw = recentData?.items?.[0] ?? null;
+  const recentItems = Array.isArray(recentData?.items)
+    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force })
+    : [];
+  const topTrackItems = Array.isArray(tracksData?.items)
+    ? await enrichTrackItemsWithAlbumOwners(tracksData.items, {
+        force,
+        albumItems: Array.isArray(albumsData?.items) ? albumsData.items : [],
+      })
+    : [];
+  const recentItemRaw: any = recentItems[0] ?? null;
 
   const platformDecision = extractUserPlatform(profileRaw, key);
   const nowPlayingRaw =
-    Array.isArray(recentData?.items) && recentData.items[0]
-      ? normalizeRecentItem(recentData.items[0])
+    recentItems[0]
+      ? normalizeRecentItem(recentItems[0])
       : null;
 
-  const recentNormalized = Array.isArray(recentData?.items)
-    ? recentData.items.map(normalizeRecentItem)
-    : [];
+  const recentNormalized = recentItems.map(normalizeRecentItem);
 
   const catalogSummary = recentNormalized.reduce(
     (acc: any, item: any) => {
@@ -192,9 +200,7 @@ async function getUserBundle(
       artists: Array.isArray(artistsData?.items)
         ? artistsData.items.map((item: any) => normalizeTopItem(item, "artists"))
         : [],
-      tracks: Array.isArray(tracksData?.items)
-        ? tracksData.items.map((item: any) => normalizeTopItem(item, "tracks"))
-        : [],
+      tracks: topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")),
       albums: Array.isArray(albumsData?.items)
         ? albumsData.items.map((item: any) => normalizeTopItem(item, "albums"))
         : [],

@@ -251,6 +251,33 @@ function sameArtist(a: any, b: any) {
   return Boolean(aName && bName && aName === bName);
 }
 
+function pickAlbumOwner(album: any) {
+  if (!album || typeof album !== "object") return null;
+
+  if (album.artist && typeof album.artist === "object") {
+    return normalizeArtist(album.artist);
+  }
+
+  const firstArtist = Array.isArray(album.artists) ? album.artists.find(Boolean) : null;
+  if (firstArtist && typeof firstArtist === "object") {
+    return normalizeArtist(firstArtist);
+  }
+
+  if (album.primaryArtist && typeof album.primaryArtist === "object") {
+    return normalizeArtist(album.primaryArtist);
+  }
+
+  const name = pickFirstNonEmpty(
+    album.primaryArtistName,
+    album.artistName,
+    typeof album.artist === "string" ? album.artist : null,
+    typeof firstArtist === "string" ? firstArtist : null
+  );
+  const id = pickFirstNonEmpty(album.primaryArtistId, album.artistId);
+
+  return name || id ? normalizeArtist({ id: id ?? null, name: name ?? null }) : null;
+}
+
 function pickPrimaryArtist(artists: any[], album: any, rawArtists: any[] = []) {
   if (artists.length === 0) return null;
 
@@ -290,7 +317,7 @@ export function normalizeAlbum(album: any) {
   const artists = Array.isArray(album?.artists)
     ? album.artists.map((artist: any) => normalizeArtist(artist))
     : [];
-  const primaryArtist = artists[0] ?? (album?.artist ? normalizeArtist(album.artist) : null);
+  const primaryArtist = artists[0] ?? pickAlbumOwner(album);
 
   return {
     id: album?.id ?? null,
@@ -318,6 +345,97 @@ export function normalizeAlbum(album: any) {
     },
     rawAvailableKeys: album && typeof album === "object" ? Object.keys(album) : []
   };
+}
+
+function albumLookupKeys(album: any) {
+  const keys = new Set<string>();
+  if (!album || typeof album !== "object") return keys;
+
+  const id = asString(album.id);
+  if (id) keys.add(`id:${id}`);
+
+  const externalIds = normalizeExternalIds(album);
+  for (const spotifyId of externalIds.spotify) keys.add(`spotify:${spotifyId}`);
+  for (const appleMusicId of externalIds.appleMusic) keys.add(`appleMusic:${appleMusicId}`);
+
+  const name = normalizedText(album.name);
+  if (name) keys.add(`name:${name}`);
+
+  return keys;
+}
+
+function topAlbumValue(item: any) {
+  return item?.album ?? item;
+}
+
+function topTrackValue(item: any) {
+  return item?.track ?? item;
+}
+
+function albumNeedsOwner(album: any) {
+  return album && typeof album === "object" && !pickAlbumOwner(album);
+}
+
+export function enrichTopTracksWithAlbumOwners(trackItems: any[], albumItems: any[] = []) {
+  if (!Array.isArray(trackItems) || trackItems.length === 0) return [];
+
+  const albumByKey = new Map<string, any>();
+  const duplicateKeys = new Set<string>();
+
+  for (const item of Array.isArray(albumItems) ? albumItems : []) {
+    const album = topAlbumValue(item);
+    const owner = pickAlbumOwner(album);
+    if (!owner) continue;
+
+    for (const key of albumLookupKeys(album)) {
+      if (albumByKey.has(key)) duplicateKeys.add(key);
+      albumByKey.set(key, album);
+    }
+  }
+
+  for (const key of duplicateKeys) {
+    if (key.startsWith("name:")) albumByKey.delete(key);
+  }
+
+  return trackItems.map((item) => {
+    const track = topTrackValue(item);
+    const album = track?.albums?.[0] || track?.album || null;
+    if (!albumNeedsOwner(album)) return item;
+
+    const matchedAlbum = [...albumLookupKeys(album)]
+      .map((key) => albumByKey.get(key))
+      .find(Boolean);
+    const owner = pickAlbumOwner(matchedAlbum);
+    if (!owner) return item;
+
+    const enrichedAlbum = {
+      ...album,
+      artist: owner,
+      artists: [owner],
+      artistId: owner.id ?? null,
+      artistName: owner.name ?? null,
+      primaryArtist: owner,
+      primaryArtistId: owner.id ?? null,
+      primaryArtistName: owner.name ?? null,
+    };
+
+    const enrichedTrack = {
+      ...track,
+      album: track?.album ? enrichedAlbum : track?.album,
+      albums: Array.isArray(track?.albums)
+        ? [enrichedAlbum, ...track.albums.slice(1)]
+        : track?.albums,
+    };
+
+    if (item?.track) {
+      return {
+        ...item,
+        track: enrichedTrack,
+      };
+    }
+
+    return enrichedTrack;
+  });
 }
 
 export function normalizeTrack(track: any) {
