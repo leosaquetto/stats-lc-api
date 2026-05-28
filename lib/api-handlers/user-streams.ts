@@ -1,14 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
-  buildQuery,
-  encodeSegment,
-  getItems,
   readOptionalQueryString,
   readQueryString,
 } from "../api-helpers.js";
-import { normalizeRecentItem } from "../normalize.js";
-import { statsfmFetch } from "../statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
+import { fetchUserStreams, normalizeStreamItems } from "../user-streams-service.js";
 import { resolveUserId } from "../users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -20,28 +15,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const userId = resolveUserId(user);
-  const query = buildQuery({
+  const params = {
     limit: readOptionalQueryString(req.query.limit),
     offset: readOptionalQueryString(req.query.offset),
     after: readOptionalQueryString(req.query.after),
     before: readOptionalQueryString(req.query.before),
-  });
+  };
 
-  const result = await statsfmFetch(`/users/${encodeSegment(userId)}/streams${query}`, {
-    force,
-  });
+  const result = await fetchUserStreams(userId, params, { force });
 
   if (!result.ok) {
     return res.status(result.status).json(result);
   }
-
-  const items = await enrichTrackItemsWithAlbumOwners(getItems(result.data), { force });
 
   res.status(200).json({
     ok: true,
     user,
     userId,
     endpoint: result.endpoint,
-    items: items.map(normalizeRecentItem),
+    items: await normalizeStreamItems(result.data, { force }),
   });
 }

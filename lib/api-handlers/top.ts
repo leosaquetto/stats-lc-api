@@ -1,11 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
-import { statsfmFetch } from "../statsfm.js";
-import { normalizeTopItem } from "../normalize.js";
-import {
-  enrichAlbumItemsWithOwners,
-  enrichTrackItemsWithAlbumOwners,
-} from "../track-album-enrichment.js";
+import { fetchUserTop, normalizeTopItems } from "../user-tops-service.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();
@@ -45,30 +40,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = resolveUserId(user);
   const after = req.query.after ? Number(req.query.after) : getAfterFromPeriod(period);
 
-  const result = await statsfmFetch(
-    `/users/${userId}/top/${type}?after=${after}&limit=${limit}`,
-    { force }
-  );
+  const result = await fetchUserTop(userId, type, after, limit, { force });
 
   if (!result.ok) {
     return res.status(result.status).json(result);
   }
 
-  const data: any = result.data;
   const albumResult = type === "tracks"
-    ? await statsfmFetch(`/users/${userId}/top/albums?after=${after}&limit=${limit}`, { force })
+    ? await fetchUserTop(userId, "albums", after, limit, { force })
     : null;
-  const rawItems = Array.isArray(data?.items) ? data.items : [];
-  const items = type === "tracks"
-    ? await enrichTrackItemsWithAlbumOwners(rawItems, {
-        force,
-        albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
-        userId,
-        after,
-      })
-    : type === "albums"
-      ? await enrichAlbumItemsWithOwners(rawItems, { force })
-      : rawItems;
+  const items = await normalizeTopItems(result.data, type, {
+    force,
+    albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
+    userId,
+    after,
+  });
 
   res.status(200).json({
     ok: true,
@@ -78,6 +64,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     period,
     after,
     endpoint: result.endpoint,
-    items: items.map((item: any) => normalizeTopItem(item, type))
+    items,
   });
 }

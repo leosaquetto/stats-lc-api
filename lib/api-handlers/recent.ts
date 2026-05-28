@@ -1,8 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
-import { statsfmFetch } from "../statsfm.js";
-import { normalizeRecentItem } from "../normalize.js";
-import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
+import { fetchUserRecentStreams, normalizeStreamItems } from "../user-streams-service.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -16,25 +14,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = resolveUserId(user);
 
-  const result = await statsfmFetch(
-    `/users/${userId}/streams/recent?limit=${limit}&offset=${offset}`,
-    { force }
-  );
+  const result = await fetchUserRecentStreams(userId, { limit, offset }, { force });
 
   if (!result.ok) {
     return res.status(result.status).json(result);
   }
-
-  const data: any = result.data;
-  const items = Array.isArray(data?.items)
-    ? await enrichTrackItemsWithAlbumOwners(data.items, { force })
-    : [];
 
   res.status(200).json({
     ok: true,
     user,
     userId,
     endpoint: result.endpoint,
-    items: items.map(normalizeRecentItem)
+    items: await normalizeStreamItems(result.data, { force }),
   });
 }

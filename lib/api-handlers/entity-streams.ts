@@ -1,16 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
-  buildQuery,
-  encodeSegment,
   ENTITY_ROUTE_MAP,
-  getItems,
   readEntityType,
   readOptionalQueryString,
   readQueryString,
 } from "../api-helpers.js";
-import { normalizeRecentItem } from "../normalize.js";
-import { statsfmFetch } from "../statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
+import { fetchUserEntityStreams, normalizeStreamItems } from "../user-streams-service.js";
 import { resolveUserId } from "../users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -24,23 +19,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const userId = resolveUserId(user);
-  const query = buildQuery({
+  const params = {
     limit: readOptionalQueryString(req.query.limit),
     offset: readOptionalQueryString(req.query.offset),
     after: readOptionalQueryString(req.query.after),
     before: readOptionalQueryString(req.query.before),
-  });
+  };
 
-  const result = await statsfmFetch(
-    `/users/${encodeSegment(userId)}/streams/${ENTITY_ROUTE_MAP[type]}/${encodeSegment(id)}${query}`,
-    { force }
-  );
+  const result = await fetchUserEntityStreams(userId, ENTITY_ROUTE_MAP[type], id, params, { force });
 
   if (!result.ok) {
     return res.status(result.status).json(result);
   }
-
-  const items = await enrichTrackItemsWithAlbumOwners(getItems(result.data), { force });
 
   res.status(200).json({
     ok: true,
@@ -49,6 +39,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     type,
     id,
     endpoint: result.endpoint,
-    items: items.map(normalizeRecentItem),
+    items: await normalizeStreamItems(result.data, { force }),
   });
 }

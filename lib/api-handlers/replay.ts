@@ -1,11 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { buildQuery, encodeSegment, getItems, readQueryString } from "../api-helpers.js";
-import { normalizeTopItem } from "../normalize.js";
-import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
-import {
-  enrichAlbumItemsWithOwners,
-  enrichTrackItemsWithAlbumOwners,
-} from "../track-album-enrichment.js";
+import { getItems, readQueryString } from "../api-helpers.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -13,6 +7,8 @@ import {
   getStartOfYearSPMs,
 } from "../time.js";
 import { resolveUserId } from "../users.js";
+import { fetchUserStatsRange, normalizeStatsSummary } from "../user-stats-service.js";
+import { fetchUserTop, normalizeTopItems } from "../user-tops-service.js";
 
 const VALID_PERIODS = ["today", "week", "month", "year", "all"] as const;
 type ReplayPeriod = typeof VALID_PERIODS[number];
@@ -34,31 +30,6 @@ function getAfterFromPeriod(period: ReplayPeriod) {
   if (period === "month") return getStartOfMonthSPMs();
   if (period === "year") return getStartOfYearSPMs();
   return 0;
-}
-
-async function normalizeTopItems(data: unknown, type: ReplayTopType, options: {
-  force?: boolean;
-  albumItems?: any[];
-  userId?: string;
-  after?: number;
-} = {}) {
-  const items = getItems(data);
-  const enrichedItems = type === "tracks"
-    ? await enrichTrackItemsWithAlbumOwners(items, {
-        force: options.force,
-        cacheProfile: "replay",
-        albumItems: options.albumItems,
-        userId: options.userId,
-        after: options.after,
-      })
-    : type === "albums"
-      ? await enrichAlbumItemsWithOwners(items, {
-          force: options.force,
-          cacheProfile: "replay",
-        })
-      : items;
-
-  return enrichedItems.map((item: any) => normalizeTopItem(item, type));
 }
 
 function compactError(result: any) {
@@ -87,28 +58,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const period = requestedPeriod;
   const userId = resolveUserId(userInput);
-  const encodedUserId = encodeSegment(userId);
   const after = getAfterFromPeriod(period);
-  const rangeQuery = buildQuery({ after });
 
   const [stats, topArtists, topTracks, topAlbums] = await Promise.all([
-    statsfmFetch(`/users/${encodedUserId}/streams/stats${rangeQuery}`, {
+    fetchUserStatsRange(userId, after, null, {
       force,
       aggregateMode: "none",
       cacheProfile: "replay",
     }),
-    statsfmFetch(
-      `/users/${encodedUserId}/top/artists${buildQuery({ after, limit: TOP_LIMITS.artists })}`,
-      { force, cacheProfile: "replay" }
-    ),
-    statsfmFetch(
-      `/users/${encodedUserId}/top/tracks${buildQuery({ after, limit: TOP_LIMITS.tracks })}`,
-      { force, cacheProfile: "replay" }
-    ),
-    statsfmFetch(
-      `/users/${encodedUserId}/top/albums${buildQuery({ after, limit: TOP_LIMITS.albums })}`,
-      { force, cacheProfile: "replay" }
-    ),
+    fetchUserTop(userId, "artists", after, TOP_LIMITS.artists, { force, cacheProfile: "replay" }),
+    fetchUserTop(userId, "tracks", after, TOP_LIMITS.tracks, { force, cacheProfile: "replay" }),
+    fetchUserTop(userId, "albums", after, TOP_LIMITS.albums, { force, cacheProfile: "replay" }),
   ]);
 
   if (!stats.ok) {
@@ -123,10 +83,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const topAlbumsRaw = topAlbums.ok ? getItems(topAlbums.data) : [];
   const normalizedTopArtists = topArtists.ok ? await normalizeTopItems(topArtists.data, "artists") : [];
   const normalizedTopTracks = topTracks.ok
-    ? await normalizeTopItems(topTracks.data, "tracks", { force, albumItems: topAlbumsRaw, userId, after })
+    ? await normalizeTopItems(topTracks.data, "tracks", {
+        force,
+        cacheProfile: "replay",
+        albumItems: topAlbumsRaw,
+        userId,
+        after,
+      })
     : [];
-  const normalizedTopAlbums = topAlbums.ok ? await normalizeTopItems(topAlbums.data, "albums") : [];
-  const totalDurationMs = getDurationMs(stats.data);
+  const normalizedTopAlbums = topAlbums.ok
+    ? await normalizeTopItems(topAlbums.data, "albums", { force, cacheProfile: "replay" })
+    : [];
+  const summary = normalizeStatsSummary(stats.data);
 
   res.status(200).json({
     ok: true,
@@ -134,11 +102,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     userId,
     period,
     after,
-    totalSongs: getCount(stats.data),
-    totalDurationMs,
-    durationMs: totalDurationMs,
-    minutes: Math.floor(totalDurationMs / 60000),
-    hours: Math.floor(totalDurationMs / 3600000),
+    totalSongs: summary.streams,
+    totalDurationMs: summary.durationMs,
+    durationMs: summary.durationMs,
+    minutes: summary.minutes,
+    hours: summary.hours,
     topArtists: normalizedTopArtists,
     topTracks: normalizedTopTracks,
     topAlbums: normalizedTopAlbums,

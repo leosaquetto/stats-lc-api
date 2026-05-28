@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDatesBreakdown, statsfmFetch } from "../statsfm.js";
 import { resolveUserId } from "../users.js";
+import { fetchUserDatesRange, normalizeDatesSummary } from "../user-stats-service.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -14,10 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = resolveUserId(user);
 
-  let path = `/users/${userId}/streams/dates?after=${after}`;
-  if (before) path += `&before=${before}`;
-
-  const result = await statsfmFetch(path, { force });
+  const result = await fetchUserDatesRange(userId, after, before, { force });
 
   if (!result.ok) {
     return res.status(result.status).json(result);
@@ -28,6 +25,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     user,
     userId,
     endpoint: result.endpoint,
-    ...getDatesBreakdown(result.data),
+    ...normalizeDatesSummary(result.data),
   });
 }

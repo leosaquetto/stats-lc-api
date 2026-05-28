@@ -44,6 +44,11 @@ Represents **catalog availability** for the track.
 - Cardinality lookups use the raw upstream `streams/stats` response for the requested range and are not reconstructed from monthly blocks.
 - Cache/debug metadata is intentionally kept out of normal endpoint payloads and is exposed only via `/api/health` and optional debug surfaces.
 - Live now-playing calls may opt into an internal `cacheProfile: "live"` with a shorter fresh/stale window. This is still handled inside `statsfmFetch` and does not change normal endpoint payloads.
+- Public handlers should stay thin wrappers around shared internal service helpers:
+  - `lib/user-stats-service.ts` for stats and date ranges.
+  - `lib/user-streams-service.ts` for recent, user, and entity stream lists.
+  - `lib/user-tops-service.ts` for top artists/tracks/albums/genres and normalized top payloads.
+- Keep the public endpoint contract stable even when consolidating internals; the goal is one upstream/normalization path per data family, not fewer app-facing routes.
 
 ## Public Endpoint Reference
 
@@ -152,4 +157,4 @@ Normalized tracks keep their existing fields and additionally expose primary-art
 - `track.primaryArtistName`
 - `track.secondaryArtists`
 
-Primary artist selection prefers the album owner when it matches a track artist, then explicit primary/main artist markers from the raw payload, then the first track artist. When multi-artist tracks arrive with an album object that has no owner, track-returning endpoints enrich the album from available top-album data or album detail before normalization. User-scoped top/replay track lists can also use `/users/:id/streams/albums/:albumId` evidence to replace a catalog-assigned single/video album with the album actually present in that user's listening history for the requested period. Album-returning endpoints also enrich ownerless albums from album detail before normalization. Normalized albums expose `artist`, `artistId`, `artistName`, `primaryArtist`, `primaryArtistId`, and `primaryArtistName`.
+Primary artist selection prefers the album owner when it matches a track artist, then explicit primary/main artist markers from the raw payload, then the first track artist. When multi-artist tracks arrive with an album object that has no owner, track-returning endpoints enrich the album from available top-album data or album detail before normalization. User-scoped top/replay/compare track lists can also use `/users/:id/streams/tracks/:trackId` and `/users/:id/streams/albums/:albumId` evidence to replace a catalog-assigned single/video album with the album actually present in that user's listening history for the requested period. Album-returning endpoints also enrich ownerless albums from album detail before normalization. Normalized albums expose `artist`, `artistId`, `artistName`, `primaryArtist`, `primaryArtistId`, and `primaryArtistName`.

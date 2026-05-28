@@ -5,6 +5,7 @@ import {
   normalizeRecentItem,
 } from "../normalize.js";
 import { statsfmFetch } from "../statsfm.js";
+import { fetchUserRecentStreams } from "../user-streams-service.js";
 import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
@@ -44,10 +45,7 @@ async function getLiveUserBundle(
 ) {
   const [profile, recent] = await Promise.all([
     statsfmFetch(`/users/${user.id}`, { force }),
-    statsfmFetch(`/users/${user.id}/streams/recent?limit=1`, {
-      force,
-      cacheProfile: "live",
-    }),
+    fetchUserRecentStreams(user.id, { limit: 1 }, { force, cacheProfile: "live" }),
   ]);
 
   const profileData: any = profile.data;

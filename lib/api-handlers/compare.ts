@@ -20,6 +20,8 @@ import {
   statsfmFetch,
   type StatsfmResult,
 } from "../statsfm.js";
+import { fetchUserDatesRange, fetchUserStatsRange } from "../user-stats-service.js";
+import { fetchUserTop } from "../user-tops-service.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -258,10 +260,6 @@ async function fetchUserComparisonData(
     after: range.after,
     before: range.before,
   };
-  const topQuery = buildQuery({
-    ...rangeQuery,
-    limit,
-  });
   const [
     profile,
     stats,
@@ -274,18 +272,18 @@ async function fetchUserComparisonData(
     lastStreams,
   ] = await Promise.all([
     statsfmFetch(`/users/${encodeSegment(userId)}`, { force }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/streams/stats${buildQuery(rangeQuery)}`, {
+    fetchUserStatsRange(userId, range.after, range.before, {
       force,
       aggregateMode: "none",
     }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/streams/dates${buildQuery(rangeQuery)}`, {
+    fetchUserDatesRange(userId, range.after, range.before, {
       force,
       aggregateMode: "none",
     }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/top/tracks${topQuery}`, { force }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/top/artists${topQuery}`, { force }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/top/albums${topQuery}`, { force }),
-    statsfmFetch(`/users/${encodeSegment(userId)}/top/genres${topQuery}`, { force }),
+    fetchUserTop(userId, "tracks", range.after, limit, { force }, range.before),
+    fetchUserTop(userId, "artists", range.after, limit, { force }, range.before),
+    fetchUserTop(userId, "albums", range.after, limit, { force }, range.before),
+    fetchUserTop(userId, "genres", range.after, limit, { force }, range.before),
     statsfmFetch(`/users/${encodeSegment(userId)}/streams${buildQuery({ ...rangeQuery, limit: 5, order: "asc" })}`, { force }),
     statsfmFetch(`/users/${encodeSegment(userId)}/streams${buildQuery({ ...rangeQuery, limit: 5, order: "desc" })}`, { force }),
   ]);
@@ -312,6 +310,9 @@ async function fetchUserComparisonData(
     ? await enrichTrackItemsWithAlbumOwners(getItems(topTracks.data), {
         force,
         albumItems: topAlbums.ok ? getItems(topAlbums.data) : [],
+        userId,
+        after: range.after,
+        before: range.before,
       })
     : [];
   const firstStreamItems: any[] = firstStreams.ok

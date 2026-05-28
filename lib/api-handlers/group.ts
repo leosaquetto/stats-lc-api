@@ -6,6 +6,9 @@ import {
   getStatsfmHealthSnapshot,
   statsfmFetch,
 } from "../statsfm.js";
+import { fetchUserStatsRange } from "../user-stats-service.js";
+import { fetchUserRecentStreams } from "../user-streams-service.js";
+import { fetchUserTop } from "../user-tops-service.js";
 import {
   extractUserPlatform,
   normalizeRecentItem,
@@ -74,13 +77,13 @@ async function getUserBundle(
     topAlbums,
   ] = await Promise.all([
     statsfmFetch(`/users/${user.id}`, { force }),
-    statsfmFetch(`/users/${user.id}/streams/recent?limit=10`, { force }),
-    statsfmFetch(`/users/${user.id}/streams/stats?after=${afterToday}`, { force }),
-    statsfmFetch(`/users/${user.id}/streams/stats?after=${afterWeek}`, { force }),
-    statsfmFetch(`/users/${user.id}/streams/stats?after=${afterMonth}`, { force }),
-    statsfmFetch(`/users/${user.id}/top/artists?after=${afterWeek}&limit=5`, { force }),
-    statsfmFetch(`/users/${user.id}/top/tracks?after=${afterWeek}&limit=5`, { force }),
-    statsfmFetch(`/users/${user.id}/top/albums?after=${afterWeek}&limit=5`, { force }),
+    fetchUserRecentStreams(user.id, { limit: 10 }, { force }),
+    fetchUserStatsRange(user.id, afterToday, null, { force }),
+    fetchUserStatsRange(user.id, afterWeek, null, { force }),
+    fetchUserStatsRange(user.id, afterMonth, null, { force }),
+    fetchUserTop(user.id, "artists", afterWeek, 5, { force }),
+    fetchUserTop(user.id, "tracks", afterWeek, 5, { force }),
+    fetchUserTop(user.id, "albums", afterWeek, 5, { force }),
   ]);
 
   const profileData: any = profile.data;
