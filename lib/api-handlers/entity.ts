@@ -5,10 +5,10 @@ import {
   getItem,
   readEntityType,
   readQueryString,
-} from "../lib/api-helpers.js";
-import { normalizeEntity } from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+} from "../api-helpers.js";
+import { normalizeEntity } from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const type = readEntityType(req.query.type);

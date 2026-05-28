@@ -1,11 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { USERS } from "../lib/users.js";
+import { USERS } from "../users.js";
 import {
   extractUserPlatform,
   normalizeRecentItem,
-} from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+} from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 

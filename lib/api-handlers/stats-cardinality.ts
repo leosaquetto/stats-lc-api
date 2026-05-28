@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolveUserId } from "../lib/users.js";
-import { getCount, getDurationMs, statsfmFetch } from "../lib/statsfm.js";
+import { resolveUserId } from "../users.js";
+import { getCardinality, getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -17,7 +17,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let path = `/users/${userId}/streams/stats?after=${after}`;
   if (before) path += `&before=${before}`;
 
-  const result = await statsfmFetch(path, { force });
+  const result = await statsfmFetch(path, {
+    force,
+    aggregateMode: "none",
+  });
 
   if (!result.ok) {
     return res.status(result.status).json(result);
@@ -34,6 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     streams: getCount(data),
     durationMs,
     minutes: Math.floor(durationMs / 60000),
-    hours: Math.floor(durationMs / 3600000)
+    hours: Math.floor(durationMs / 3600000),
+    cardinality: getCardinality(data),
   });
 }

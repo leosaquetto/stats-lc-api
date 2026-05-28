@@ -1,26 +1,26 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { USERS } from "../lib/users.js";
+import { USERS } from "../users.js";
 import {
   getCount,
   getDurationMs,
   getStatsfmHealthSnapshot,
   statsfmFetch,
-} from "../lib/statsfm.js";
+} from "../statsfm.js";
 import {
   extractUserPlatform,
   normalizeRecentItem,
   normalizeTopItem,
-} from "../lib/normalize.js";
+} from "../normalize.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
-} from "../lib/track-album-enrichment.js";
+} from "../track-album-enrichment.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
   getStartOfWeekSPMs,
   TIMEZONE_SP,
-} from "../lib/time.js";
+} from "../time.js";
 
 
 

@@ -1,11 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolveUserId } from "../lib/users.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { normalizeTopItem } from "../lib/normalize.js";
+import { resolveUserId } from "../users.js";
+import { statsfmFetch } from "../statsfm.js";
+import { normalizeTopItem } from "../normalize.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
-} from "../lib/track-album-enrichment.js";
+} from "../track-album-enrichment.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();

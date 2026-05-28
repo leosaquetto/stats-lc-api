@@ -5,13 +5,13 @@ import {
   getItems,
   readOptionalQueryString,
   readQueryString,
-} from "../lib/api-helpers.js";
-import { normalizeAlbum, normalizeArtist, normalizeTrack } from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
+} from "../api-helpers.js";
+import { normalizeAlbum, normalizeArtist, normalizeTrack } from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
-} from "../lib/track-album-enrichment.js";
+} from "../track-album-enrichment.js";
 
 const SECTION_PATHS = {
   tracks: "tracks",

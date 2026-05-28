@@ -2,21 +2,25 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   buildQuery,
   encodeSegment,
+  ENTITY_ROUTE_MAP,
   getItems,
+  readEntityType,
   readOptionalQueryString,
   readQueryString,
-} from "../lib/api-helpers.js";
-import { normalizeRecentItem } from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
-import { resolveUserId } from "../lib/users.js";
+} from "../api-helpers.js";
+import { normalizeRecentItem } from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
+import { resolveUserId } from "../users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const type = readEntityType(req.query.type);
+  const id = readQueryString(req.query.id);
   const user = readQueryString(req.query.user);
   const force = req.query.force === "1";
 
-  if (!user) {
-    return res.status(400).json({ ok: false, error: "missing_user" });
+  if (!type || !id || !user) {
+    return res.status(400).json({ ok: false, error: "missing_type_id_or_user" });
   }
 
   const userId = resolveUserId(user);
@@ -27,9 +31,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     before: readOptionalQueryString(req.query.before),
   });
 
-  const result = await statsfmFetch(`/users/${encodeSegment(userId)}/streams${query}`, {
-    force,
-  });
+  const result = await statsfmFetch(
+    `/users/${encodeSegment(userId)}/streams/${ENTITY_ROUTE_MAP[type]}/${encodeSegment(id)}${query}`,
+    { force }
+  );
 
   if (!result.ok) {
     return res.status(result.status).json(result);
@@ -41,6 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ok: true,
     user,
     userId,
+    type,
+    id,
     endpoint: result.endpoint,
     items: items.map(normalizeRecentItem),
   });

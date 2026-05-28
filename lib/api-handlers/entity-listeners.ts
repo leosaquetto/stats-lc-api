@@ -7,9 +7,9 @@ import {
   readEntityType,
   readOptionalQueryString,
   readQueryString,
-} from "../lib/api-helpers.js";
-import { normalizePlayedMs, normalizeUserSummary } from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
+} from "../api-helpers.js";
+import { normalizePlayedMs, normalizeUserSummary } from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const type = readEntityType(req.query.type);

@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { extractUserPlatform } from "../lib/normalize.js";
-import { resolveUserId } from "../lib/users.js";
-import { statsfmFetch } from "../lib/statsfm.js";
+import { extractUserPlatform } from "../normalize.js";
+import { resolveUserId } from "../users.js";
+import { statsfmFetch } from "../statsfm.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDatesBreakdown, statsfmFetch } from "../lib/statsfm.js";
-import { resolveUserId } from "../lib/users.js";
+import { resolveUserId } from "../users.js";
+import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = resolveUserId(user);
 
-  let path = `/users/${userId}/streams/dates?after=${after}`;
+  let path = `/users/${userId}/streams/stats?after=${after}`;
   if (before) path += `&before=${before}`;
 
   const result = await statsfmFetch(path, { force });
@@ -23,11 +23,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const data: any = result.data;
+  const durationMs = getDurationMs(data);
+
   res.status(200).json({
     ok: true,
     user,
     userId,
     endpoint: result.endpoint,
-    ...getDatesBreakdown(result.data),
+    streams: getCount(data),
+    durationMs,
+    minutes: Math.floor(durationMs / 60000),
+    hours: Math.floor(durationMs / 3600000)
   });
 }

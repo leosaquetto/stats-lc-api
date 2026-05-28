@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
-import entityGroupStatsHandler from "./entity-group-stats.ts";
-import groupLiveHandler from "./group-live.ts";
-import statsCardinalityHandler from "./stats-cardinality.ts";
-import statsDatesHandler from "./stats-dates.ts";
+import entityGroupStatsHandler from "../lib/api-handlers/entity-group-stats.ts";
+import groupLiveHandler from "../lib/api-handlers/group-live.ts";
+import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
+import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import {
   enrichAlbumItemsWithOwners,

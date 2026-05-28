@@ -1,18 +1,18 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { buildQuery, encodeSegment, getItems, readQueryString } from "../lib/api-helpers.js";
-import { normalizeTopItem } from "../lib/normalize.js";
-import { getCount, statsfmFetch } from "../lib/statsfm.js";
+import { buildQuery, encodeSegment, getItems, readQueryString } from "../api-helpers.js";
+import { normalizeTopItem } from "../normalize.js";
+import { getCount, statsfmFetch } from "../statsfm.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
-} from "../lib/track-album-enrichment.js";
+} from "../track-album-enrichment.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
   getStartOfWeekSPMs,
   getStartOfYearSPMs,
-} from "../lib/time.js";
-import { resolveUserId } from "../lib/users.js";
+} from "../time.js";
+import { resolveUserId } from "../users.js";
 
 const VALID_PERIODS = ["today", "week", "month", "year", "all"] as const;
 type ReplayPeriod = typeof VALID_PERIODS[number];

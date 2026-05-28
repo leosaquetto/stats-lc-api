@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
-import compareHandler from "./compare.ts";
+import compareHandler from "../lib/api-handlers/compare.ts";
 import { __resetStatsfmStateForTests } from "../lib/statsfm.ts";
 
 const originalFetch = globalThis.fetch;

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { buildQuery, encodeSegment, getItem, getItems, readOptionalQueryString, readQueryString } from "../lib/api-helpers.js";
+import { buildQuery, encodeSegment, getItem, getItems, readOptionalQueryString, readQueryString } from "../api-helpers.js";
 import {
   normalizeAlbum,
   normalizeArtist,
@@ -7,11 +7,11 @@ import {
   normalizeTopItem,
   normalizeTrack,
   normalizeUserSummary,
-} from "../lib/normalize.js";
+} from "../normalize.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
-} from "../lib/track-album-enrichment.js";
+} from "../track-album-enrichment.js";
 import {
   getCardinality,
   getCount,
@@ -19,14 +19,14 @@ import {
   getDurationMs,
   statsfmFetch,
   type StatsfmResult,
-} from "../lib/statsfm.js";
+} from "../statsfm.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
   getStartOfWeekSPMs,
   TIMEZONE_SP,
-} from "../lib/time.js";
-import { resolveUserId } from "../lib/users.js";
+} from "../time.js";
+import { resolveUserId } from "../users.js";
 
 type TopKind = "tracks" | "artists" | "albums";
 type CommonKind = TopKind | "genres";

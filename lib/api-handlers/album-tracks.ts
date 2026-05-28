@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { encodeSegment, getItems, readQueryString } from "../lib/api-helpers.js";
-import { normalizeTrack } from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import { encodeSegment, getItems, readQueryString } from "../api-helpers.js";
+import { normalizeTrack } from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
+import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = readQueryString(req.query.id);

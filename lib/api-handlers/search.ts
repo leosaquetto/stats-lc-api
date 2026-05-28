@@ -1,16 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { buildQuery, getItems, readOptionalQueryString, readQueryString } from "../lib/api-helpers.js";
+import { buildQuery, getItems, readOptionalQueryString, readQueryString } from "../api-helpers.js";
 import {
   normalizeAlbum,
   normalizeArtist,
   normalizeTrack,
   normalizeUserSummary,
-} from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
+} from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
-} from "../lib/track-album-enrichment.js";
+} from "../track-album-enrichment.js";
 
 function getSearchType(item: any) {
   return item?.type ?? item?.item?.type ?? null;

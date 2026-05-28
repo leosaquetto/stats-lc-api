@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
-import albumTracksHandler from "./album-tracks.ts";
-import artistCatalogHandler from "./artist-catalog.ts";
-import entityHandler from "./entity.ts";
-import entityListenersHandler from "./entity-listeners.ts";
-import entityStreamsHandler from "./entity-streams.ts";
-import searchHandler from "./search.ts";
-import userFriendsHandler from "./user-friends.ts";
-import userStreamsHandler from "./user-streams.ts";
+import albumTracksHandler from "../lib/api-handlers/album-tracks.ts";
+import artistCatalogHandler from "../lib/api-handlers/artist-catalog.ts";
+import entityHandler from "../lib/api-handlers/entity.ts";
+import entityListenersHandler from "../lib/api-handlers/entity-listeners.ts";
+import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
+import searchHandler from "../lib/api-handlers/search.ts";
+import userFriendsHandler from "../lib/api-handlers/user-friends.ts";
+import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
 import {
   normalizeAlbum,
   normalizeArtist,

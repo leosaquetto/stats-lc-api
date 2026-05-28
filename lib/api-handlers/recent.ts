@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { resolveUserId } from "../lib/users.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { normalizeRecentItem } from "../lib/normalize.js";
-import { enrichTrackItemsWithAlbumOwners } from "../lib/track-album-enrichment.js";
+import { resolveUserId } from "../users.js";
+import { statsfmFetch } from "../statsfm.js";
+import { normalizeRecentItem } from "../normalize.js";
+import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");

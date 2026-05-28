@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { encodeSegment, getItem, getItems, readQueryString } from "../lib/api-helpers.js";
-import { normalizeUserSummary } from "../lib/normalize.js";
-import { statsfmFetch } from "../lib/statsfm.js";
-import { resolveUserId } from "../lib/users.js";
+import { encodeSegment, getItem, getItems, readQueryString } from "../api-helpers.js";
+import { normalizeUserSummary } from "../normalize.js";
+import { statsfmFetch } from "../statsfm.js";
+import { resolveUserId } from "../users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = readQueryString(req.query.user);
