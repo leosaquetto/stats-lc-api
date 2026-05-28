@@ -450,7 +450,32 @@ export function normalizeTrack(track: any) {
     : [];
 
   const normalizedAlbum = album ? normalizeAlbum(album) : null;
-  const primaryArtist = pickPrimaryArtist(artists, album, rawArtists);
+  const fallbackArtistName = pickFirstNonEmpty(
+    track?.primaryArtistName,
+    track?.artistName,
+    typeof track?.artist === "string" ? track.artist : null,
+    track?.artist?.name,
+    album?.artistName,
+    typeof album?.artist === "string" ? album.artist : null,
+    album?.artist?.name,
+    album?.primaryArtistName,
+    album?.primaryArtist?.name
+  );
+  const fallbackArtistId = pickFirstNonEmpty(
+    track?.primaryArtistId,
+    track?.artistId,
+    track?.artist?.id,
+    album?.artistId,
+    album?.artist?.id,
+    album?.primaryArtistId,
+    album?.primaryArtist?.id
+  );
+  const fallbackArtist = track?.primaryArtist && typeof track.primaryArtist === "object"
+    ? normalizeArtist(track.primaryArtist)
+    : fallbackArtistName || fallbackArtistId
+      ? normalizeArtist({ id: fallbackArtistId ?? null, name: fallbackArtistName ?? null })
+      : null;
+  const primaryArtist = pickPrimaryArtist(artists, album, rawArtists) ?? fallbackArtist ?? pickAlbumOwner(album);
   const secondaryArtists = primaryArtist
     ? artists.filter((artist: any) => !sameArtist(artist, primaryArtist))
     : [];
@@ -465,7 +490,7 @@ export function normalizeTrack(track: any) {
     explicit: track?.explicit ?? null,
     spotifyPreview: track?.spotifyPreview ?? null,
     appleMusicPreview: track?.appleMusicPreview ?? null,
-    image: normalizeImage(album),
+    image: normalizeImage(album) ?? normalizeImage(track),
     artists,
     primaryArtist,
     secondaryArtists,
@@ -475,7 +500,7 @@ export function normalizeTrack(track: any) {
     album: normalizedAlbum,
     albumId: normalizedAlbum?.id ?? null,
     albumName: normalizedAlbum?.name ?? null,
-    albumImage: normalizedAlbum?.image ?? null,
+    albumImage: normalizedAlbum?.image ?? normalizeImage(track),
     externalIds: trackExternalIds,
     spotifyId,
     appleMusicId,
