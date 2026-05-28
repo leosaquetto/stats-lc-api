@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../users.js";
 import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
+import { mapWithConcurrency, setCacheHeaders } from "../api-helpers.js";
 
 const routeMap = {
   track: "tracks",
@@ -60,8 +61,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string }]>;
-  const settled = await Promise.allSettled(
-    users.map(([key, user]) => getEntityStatsForUser(String(key), user, type, id, force))
+  const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
+    getEntityStatsForUser(String(key), user, type, id, force)
   );
 
   const members = settled.map((result, index) => {
@@ -78,6 +79,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       error: String(result.reason),
     };
   });
+
+  setCacheHeaders(res, 120, force);
 
   res.status(200).json({
     ok: true,

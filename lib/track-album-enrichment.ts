@@ -393,7 +393,10 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
   const missingTrackIds = new Set(
     sourceItems
       .map(getTrackId)
-      .filter((trackId): trackId is string => Boolean(trackId) && !trackStreamEvidence.has(trackId))
+      .filter((trackId): trackId is string => {
+        if (!trackId) return false;
+        return !trackStreamEvidence.has(trackId);
+      })
   );
   const streamAlbumEvidence = missingTrackIds.size > 0
     ? await fetchStreamAlbumEvidence(sourceItems, options, missingTrackIds)

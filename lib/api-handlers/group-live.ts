@@ -7,6 +7,7 @@ import {
 import { statsfmFetch } from "../statsfm.js";
 import { fetchUserRecentStreams } from "../user-streams-service.js";
 import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
+import { mapWithConcurrency, setCacheHeaders } from "../api-helpers.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 
@@ -110,8 +111,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const debug = req.query.debug === "1";
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string; platform?: string }]>;
 
-  const settled = await Promise.allSettled(
-    users.map(([key, user]) => getLiveUserBundle(String(key), user, force, debug))
+  const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
+    getLiveUserBundle(String(key), user, force, debug)
   );
 
   const members = settled.map((result, index) => {
@@ -137,6 +138,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       error: String(result.reason),
     };
   });
+
+  setCacheHeaders(res, 5, force || debug, 10);
 
   res.status(200).json({
     ok: true,

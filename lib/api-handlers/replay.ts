@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getItems, readQueryString } from "../api-helpers.js";
+import { getItems, readQueryString, setCacheHeaders } from "../api-helpers.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -95,6 +95,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? await normalizeTopItems(topAlbums.data, "albums", { force, cacheProfile: "replay" })
     : [];
   const summary = normalizeStatsSummary(stats.data);
+
+  setCacheHeaders(res, 300, force);
 
   res.status(200).json({
     ok: true,

@@ -44,3 +44,43 @@ export function getItems(data: any) {
 export function getItem(data: any) {
   return data?.item ?? null;
 }
+
+export function setCacheHeaders(
+  res: { setHeader(name: string, value: string): unknown },
+  seconds: number,
+  force = false,
+  staleSeconds = seconds * 6
+) {
+  if (force) {
+    res.setHeader("Cache-Control", "no-store");
+    return;
+  }
+
+  res.setHeader(
+    "Cache-Control",
+    `public, s-maxage=${seconds}, stale-while-revalidate=${staleSeconds}`
+  );
+}
+
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await Promise.resolve(mapper(items[index], index)).then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason })
+      );
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}

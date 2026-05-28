@@ -24,6 +24,7 @@ import {
   getStartOfWeekSPMs,
   TIMEZONE_SP,
 } from "../time.js";
+import { mapWithConcurrency, setCacheHeaders } from "../api-helpers.js";
 
 
 
@@ -239,10 +240,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const afterWeek = getStartOfWeekSPMs();
   const afterMonth = getStartOfMonthSPMs();
 
-  const settled = await Promise.allSettled(
-    users.map(([key, user]) =>
-      getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug)
-    )
+  const settled = await mapWithConcurrency(
+    users,
+    2,
+    ([key, user]) => getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug)
   );
 
   const members = settled.map((result, index) => {
@@ -316,6 +317,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })),
       }
     : undefined;
+
+  setCacheHeaders(res, 60, force || debug);
 
   res.status(200).json({
     ok: true,

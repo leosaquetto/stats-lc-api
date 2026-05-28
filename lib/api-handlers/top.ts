@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
 import { fetchUserTop, normalizeTopItems } from "../user-tops-service.js";
+import { setCacheHeaders } from "../api-helpers.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();
@@ -55,6 +56,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     userId,
     after,
   });
+
+  setCacheHeaders(res, 300, force);
 
   res.status(200).json({
     ok: true,

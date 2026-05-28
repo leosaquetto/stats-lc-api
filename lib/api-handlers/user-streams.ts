@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   readOptionalQueryString,
   readQueryString,
+  setCacheHeaders,
 } from "../api-helpers.js";
 import { fetchUserStreams, normalizeStreamItems } from "../user-streams-service.js";
 import { resolveUserId } from "../users.js";
@@ -28,6 +29,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!result.ok) {
     return res.status(result.status).json(result);
   }
+
+  setCacheHeaders(res, 300, force);
 
   res.status(200).json({
     ok: true,
