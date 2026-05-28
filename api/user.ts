@@ -35,7 +35,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = resolveUserId(user);
   const result = await statsfmFetch(`/users/${userId}`, { force });
 
-  const profileRaw = result?.data?.item ?? null;
+  const data = result.data as any;
+  const profileRaw = data?.item ?? null;
   const platform = extractUserPlatform(profileRaw, user);
 
   const payload = {
