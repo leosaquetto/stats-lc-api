@@ -52,12 +52,23 @@ function readRoutePath(value: unknown) {
   return value == null ? "" : String(value);
 }
 
+function getRoutePath(req: VercelRequest) {
+  const queryPath = readRoutePath(req.query.path || req.query["...path"]);
+  if (queryPath) return queryPath.replace(/^\/+|\/+$/g, "");
+
+  const url = typeof req.url === "string" ? req.url : "";
+  return url
+    .split("?")[0]
+    .replace(/^\/api\/?/, "")
+    .replace(/^\/+|\/+$/g, "");
+}
+
 export default function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
 
-  const routePath = readRoutePath(req.query.path).replace(/^\/+|\/+$/g, "");
+  const routePath = getRoutePath(req);
   const route = ROUTES[routePath];
 
   if (!route) {
