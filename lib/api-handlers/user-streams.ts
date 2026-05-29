@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   readOptionalQueryString,
   readQueryString,
+  sendJsonError,
   setCacheHeaders,
 } from "../api-helpers.js";
 import { fetchUserStreams, normalizeStreamItems } from "../user-streams-service.js";
@@ -13,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const resolveAlbums = req.query.resolveAlbums === "1";
 
   if (!user) {
-    return res.status(400).json({ ok: false, error: "missing_user" });
+    return sendJsonError(res, 400, "missing_user");
   }
 
   const userId = resolveUserId(user);
@@ -24,23 +25,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     before: readOptionalQueryString(req.query.before),
   };
 
-  const result = await fetchUserStreams(userId, params, { force });
+  const limit = Number(params.limit || 0);
+  const upstreamForce = force && !resolveAlbums && limit <= 50;
 
-  if (!result.ok) {
-    return res.status(result.status).json(result);
-  }
+  try {
+    const result = await fetchUserStreams(userId, params, { force: upstreamForce });
 
-  setCacheHeaders(res, 300, force);
+    if (!result.ok) {
+      return sendJsonError(res, result.status || 502, "upstream_error", {
+        endpoint: result.endpoint,
+        upstreamStatus: result.status,
+      });
+    }
 
-  res.status(200).json({
-    ok: true,
-    user,
-    userId,
-    endpoint: result.endpoint,
-    items: await normalizeStreamItems(result.data, {
-      force,
+    setCacheHeaders(res, resolveAlbums ? 600 : 300, upstreamForce, resolveAlbums ? 3600 : 1800);
+
+    return res.status(200).json({
+      ok: true,
+      user,
       userId,
-      useTrackStreamEvidence: resolveAlbums,
-    }),
-  });
+      endpoint: result.endpoint,
+      items: await normalizeStreamItems(result.data, {
+        force: upstreamForce,
+        userId,
+        useTrackStreamEvidence: resolveAlbums,
+      }),
+    });
+  } catch (error: any) {
+    return sendJsonError(res, 503, "user_streams_failed", {
+      user,
+      userId,
+      message: error?.message ?? String(error),
+    });
+  }
 }

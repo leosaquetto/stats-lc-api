@@ -45,6 +45,15 @@ export function getItem(data: any) {
   return data?.item ?? null;
 }
 
+export function setCorsHeaders(
+  res: { setHeader(name: string, value: string): unknown }
+) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+  res.setHeader("Access-Control-Expose-Headers", "Cache-Control");
+}
+
 export function setCacheHeaders(
   res: { setHeader(name: string, value: string): unknown },
   seconds: number,
@@ -60,6 +69,22 @@ export function setCacheHeaders(
     "Cache-Control",
     `public, s-maxage=${seconds}, stale-while-revalidate=${staleSeconds}`
   );
+}
+
+export function sendJsonError(
+  res: { status(code: number): { json(body: any): unknown; end?: () => unknown }; setHeader(name: string, value: string): unknown },
+  status: number,
+  error: string,
+  details?: unknown
+) {
+  setCorsHeaders(res);
+  setCacheHeaders(res, 0, true);
+
+  return res.status(status).json({
+    ok: false,
+    error,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
 export async function mapWithConcurrency<T, R>(

@@ -1,13 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../users.js";
-import {
-  extractUserPlatform,
-  normalizeRecentItem,
-} from "../normalize.js";
+import { extractUserPlatform, normalizeRecentItem } from "../normalize.js";
 import { statsfmFetch } from "../statsfm.js";
 import { fetchUserRecentStreams } from "../user-streams-service.js";
-import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
-import { mapWithConcurrency, setCacheHeaders } from "../api-helpers.js";
+import { mapWithConcurrency, sendJsonError, setCacheHeaders } from "../api-helpers.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 
@@ -38,29 +34,39 @@ function getDisplayName(profileData: any, fallback: string) {
   );
 }
 
+async function fetchSafe<T>(promise: Promise<T>) {
+  try {
+    return await promise;
+  } catch (error: any) {
+    return error;
+  }
+}
+
 async function getLiveUserBundle(
   key: string,
   user: { id: string; platform?: string },
   force: boolean,
   debug: boolean
 ) {
-  const [profile, recent] = await Promise.all([
-    statsfmFetch(`/users/${user.id}`, { force }),
-    fetchUserRecentStreams(user.id, { limit: 1 }, { force, cacheProfile: "live" }),
+  const upstreamForce = false;
+
+  const [profileResult, recentResult] = await Promise.all([
+    fetchSafe(statsfmFetch(`/users/${user.id}`, { force: upstreamForce })),
+    fetchSafe(fetchUserRecentStreams(user.id, { limit: 1 }, { force: upstreamForce, cacheProfile: "live" })),
   ]);
 
-  const profileData: any = profile.data;
+  const profile = profileResult && typeof profileResult === "object" && "ok" in profileResult
+    ? profileResult
+    : { ok: false, status: 503, endpoint: `/users/${user.id}`, data: { error: "profile_fetch_failed" } };
+
+  const recent = recentResult && typeof recentResult === "object" && "ok" in recentResult
+    ? recentResult
+    : { ok: false, status: 503, endpoint: `/users/${user.id}/streams/recent`, data: { error: "recent_fetch_failed" } };
+
+  const profileData: any = (profile as any).data;
   const profileRaw = profileData?.item ?? null;
-  const recentData: any = recent.data;
-  const recentItems = Array.isArray(recentData?.items)
-    ? await enrichTrackItemsWithAlbumOwners(recentData.items, {
-        force,
-        cacheProfile: "live",
-        userId: user.id,
-        useTrackStreamEvidence: true,
-      })
-    : [];
-  const recentItemRaw = recentItems[0] ?? null;
+  const recentData: any = (recent as any).data;
+  const recentItemRaw = Array.isArray(recentData?.items) ? recentData.items[0] ?? null : null;
   const nowPlayingRaw = recentItemRaw ? normalizeRecentItem(recentItemRaw) : null;
   const platformDecision = extractUserPlatform(profileRaw, key);
 
@@ -100,8 +106,8 @@ async function getLiveUserBundle(
         }
       : {}),
     errors: {
-      profile: profile.ok ? null : profile,
-      recent: recent.ok ? null : recent,
+      profile: (profile as any).ok ? null : profile,
+      recent: (recent as any).ok ? null : recent,
     },
   };
 }
@@ -111,40 +117,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const debug = req.query.debug === "1";
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string; platform?: string }]>;
 
-  const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
-    getLiveUserBundle(String(key), user, force, debug)
-  );
+  try {
+    const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
+      getLiveUserBundle(String(key), user, force, debug)
+    );
 
-  const members = settled.map((result, index) => {
-    if (result.status === "fulfilled") return result.value;
+    const members = settled.map((result, index) => {
+      if (result.status === "fulfilled") return result.value;
 
-    const [key, user] = users[index];
+      const [key, user] = users[index];
 
-    return {
-      key,
-      id: user.id,
-      profile: {
-        displayName: String(key),
-        image: null,
-      },
-      platform: {
-        primary: user.platform ?? "unknown",
-        confidence: "manual",
-        source: "manual",
-        sourceKey: key,
-        rawValue: user.platform ?? null,
-      },
-      nowPlaying: null,
-      error: String(result.reason),
-    };
-  });
+      return {
+        key,
+        id: user.id,
+        profile: {
+          displayName: String(key),
+          image: null,
+        },
+        platform: {
+          primary: user.platform ?? "unknown",
+          confidence: "manual",
+          source: "manual",
+          sourceKey: key,
+          rawValue: user.platform ?? null,
+        },
+        nowPlaying: null,
+        error: String(result.reason),
+      };
+    });
 
-  setCacheHeaders(res, 5, force || debug, 10);
+    setCacheHeaders(res, 5, debug, 15);
 
-  res.status(200).json({
-    ok: true,
-    source: "stats.fm-api",
-    generatedAt: new Date().toISOString(),
-    members,
-  });
+    return res.status(200).json({
+      ok: true,
+      source: "stats.fm-api",
+      generatedAt: new Date().toISOString(),
+      members,
+    });
+  } catch (error: any) {
+    return sendJsonError(res, 503, "group_live_failed", {
+      message: error?.message ?? String(error),
+    });
+  }
 }

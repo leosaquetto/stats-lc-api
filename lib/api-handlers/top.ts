@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
 import { fetchUserTop, normalizeTopItems } from "../user-tops-service.js";
-import { setCacheHeaders } from "../api-helpers.js";
+import { sendJsonError, setCacheHeaders } from "../api-helpers.js";
 
 function getAfterFromPeriod(period: string) {
   const now = new Date();
@@ -31,42 +31,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const force = req.query.force === "1";
 
   if (!user) {
-    return res.status(400).json({ ok: false, error: "missing_user" });
+    return sendJsonError(res, 400, "missing_user");
   }
 
   if (!["artists", "tracks", "albums"].includes(type)) {
-    return res.status(400).json({ ok: false, error: "invalid_type" });
+    return sendJsonError(res, 400, "invalid_type");
   }
 
   const userId = resolveUserId(user);
   const after = req.query.after ? Number(req.query.after) : getAfterFromPeriod(period);
+  const upstreamForce = force && after !== 0;
 
-  const result = await fetchUserTop(userId, type, after, limit, { force });
+  try {
+    const result = await fetchUserTop(userId, type, after, limit, { force: upstreamForce });
 
-  if (!result.ok) {
-    return res.status(result.status).json(result);
+    if (!result.ok) {
+      return sendJsonError(res, result.status || 502, "upstream_error", {
+        endpoint: result.endpoint,
+        upstreamStatus: result.status,
+      });
+    }
+
+    const albumResult = type === "tracks"
+      ? await fetchUserTop(userId, "albums", after, limit, { force: upstreamForce })
+      : null;
+    const items = await normalizeTopItems(result.data, type, {
+      force: upstreamForce,
+      albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
+      userId,
+      after,
+    });
+
+    setCacheHeaders(res, after === 0 ? 900 : 300, upstreamForce, after === 0 ? 86400 : 1800);
+
+    return res.status(200).json({
+      ok: true,
+      user,
+      userId,
+      type,
+      period,
+      after,
+      endpoint: result.endpoint,
+      items,
+    });
+  } catch (error: any) {
+    return sendJsonError(res, 503, "top_fetch_failed", {
+      user,
+      userId,
+      type,
+      after,
+      message: error?.message ?? String(error),
+    });
   }
-
-  const albumResult = type === "tracks"
-    ? await fetchUserTop(userId, "albums", after, limit, { force })
-    : null;
-  const items = await normalizeTopItems(result.data, type, {
-    force,
-    albumItems: albumResult?.ok ? (albumResult.data as any)?.items : [],
-    userId,
-    after,
-  });
-
-  setCacheHeaders(res, 300, force);
-
-  res.status(200).json({
-    ok: true,
-    user,
-    userId,
-    type,
-    period,
-    after,
-    endpoint: result.endpoint,
-    items,
-  });
 }

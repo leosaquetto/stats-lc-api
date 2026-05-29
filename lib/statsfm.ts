@@ -11,6 +11,8 @@ const LIVE_FRESH_TTL_MS = 20_000;
 const LIVE_STALE_TTL_MS = 45_000;
 const REPLAY_FRESH_TTL_MS = 5 * 60_000;
 const REPLAY_STALE_TTL_MS = 10 * 60_000;
+const HEAVY_FRESH_TTL_MS = 15 * 60_000;
+const HEAVY_STALE_TTL_MS = 24 * 60 * 60_000;
 const CURRENT_MONTH_FRESH_TTL_MS = 5 * 60_000;
 const PREVIOUS_MONTH_FRESH_TTL_MS = 12 * 60 * 60_000;
 const HISTORICAL_MONTH_FRESH_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -23,12 +25,14 @@ export type StatsfmResult = {
 };
 
 type AggregateMode = "auto" | "none";
-type CacheProfile = "default" | "live" | "replay";
+type CacheProfile = "default" | "live" | "replay" | "heavy";
 
 type StatsfmFetchOptions = {
   force?: boolean;
   aggregateMode?: AggregateMode;
   cacheProfile?: CacheProfile;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
 };
 
 type CacheScope = "path" | "monthly_segment";
@@ -146,7 +150,7 @@ function saveSuccess(path: string, result: StatsfmResult, config: FetchCacheConf
     result,
     cachedAt: timestamp,
     expiresAt: timestamp + config.freshTtlMs,
-    staleUntil: timestamp + config.staleTtlMs,
+    staleUntil: timestamp + config.freshTtlMs + config.staleTtlMs,
     freshTtlMs: config.freshTtlMs,
     staleTtlMs: config.staleTtlMs,
     cacheProfile: config.cacheProfile,
@@ -206,6 +210,16 @@ function getCacheConfigForOptions(options?: StatsfmFetchOptions): FetchCacheConf
     };
   }
 
+  if (options?.cacheProfile === "heavy") {
+    return {
+      freshTtlMs: HEAVY_FRESH_TTL_MS,
+      staleTtlMs: HEAVY_STALE_TTL_MS,
+      cacheProfile: "heavy",
+      scope: "path",
+      segmentKind: null,
+    };
+  }
+
   return getDefaultCacheConfig();
 }
 
@@ -238,10 +252,16 @@ async function parseResponse(response: Response) {
   return data;
 }
 
-async function fetchUpstream(path: string, force: boolean, attempt: number): Promise<StatsfmResult> {
+async function fetchUpstream(
+  path: string,
+  force: boolean,
+  attempt: number,
+  options?: Pick<StatsfmFetchOptions, "requestTimeoutMs" | "maxRetries">
+): Promise<StatsfmResult> {
   const endpoint = getEndpoint(path);
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), options?.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+  const maxRetries = options?.maxRetries ?? MAX_RETRIES;
 
   metrics.upstreamRequests += 1;
 
@@ -263,11 +283,11 @@ async function fetchUpstream(path: string, force: boolean, attempt: number): Pro
       data,
     };
 
-    if (!result.ok && shouldRetryStatus(result.status) && attempt < MAX_RETRIES) {
+    if (!result.ok && shouldRetryStatus(result.status) && attempt < maxRetries) {
       updateErrorState(path, { status: result.status, reason: `http_${result.status}` });
       metrics.retries += 1;
       await sleep(RETRY_DELAY_MS);
-      return fetchUpstream(path, force, attempt + 1);
+      return fetchUpstream(path, force, attempt + 1, options);
     }
 
     return result;
@@ -279,10 +299,10 @@ async function fetchUpstream(path: string, force: boolean, attempt: number): Pro
 
     updateErrorState(path, { reason });
 
-    if (attempt < MAX_RETRIES) {
+    if (attempt < maxRetries) {
       metrics.retries += 1;
       await sleep(RETRY_DELAY_MS);
-      return fetchUpstream(path, force, attempt + 1);
+      return fetchUpstream(path, force, attempt + 1, options);
     }
 
     return {
@@ -344,7 +364,10 @@ async function executeFetch(
   }
 
   const request = (async () => {
-    const upstream = await fetchUpstream(key, force, 0);
+    const upstream = await fetchUpstream(key, force, 0, {
+      requestTimeoutMs: options?.requestTimeoutMs,
+      maxRetries: options?.maxRetries,
+    });
 
     if (upstream.ok) {
       saveSuccess(key, upstream, resolvedCacheConfig);
@@ -646,6 +669,7 @@ export function getStatsfmHealthSnapshot() {
   const monthlySegmentEntries = [...cache.entries()].filter(([, entry]) => entry.scope === "monthly_segment");
   const liveEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "live");
   const replayEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "replay");
+  const heavyEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "heavy");
   const defaultEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "default");
   const monthlyFreshEntries = monthlySegmentEntries.filter(([, entry]) => entry.expiresAt > timestamp).length;
   const monthlyStaleEntries = monthlySegmentEntries.filter(
@@ -675,6 +699,11 @@ export function getStatsfmHealthSnapshot() {
         fresh: replayEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
         stale: replayEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
       },
+      heavy: {
+        total: heavyEntries.length,
+        fresh: heavyEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
+        stale: heavyEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
+      },
     },
     monthlySegments: {
       total: monthlySegmentEntries.length,
@@ -695,6 +724,10 @@ export function getStatsfmHealthSnapshot() {
       maxRetries: MAX_RETRIES,
       liveFreshTtlMs: LIVE_FRESH_TTL_MS,
       liveStaleTtlMs: LIVE_STALE_TTL_MS,
+      replayFreshTtlMs: REPLAY_FRESH_TTL_MS,
+      replayStaleTtlMs: REPLAY_STALE_TTL_MS,
+      heavyFreshTtlMs: HEAVY_FRESH_TTL_MS,
+      heavyStaleTtlMs: HEAVY_STALE_TTL_MS,
       monthlyFreshTtls: {
         currentMonthMs: CURRENT_MONTH_FRESH_TTL_MS,
         previousMonthMs: PREVIOUS_MONTH_FRESH_TTL_MS,

@@ -24,7 +24,7 @@ import {
   getStartOfWeekSPMs,
   TIMEZONE_SP,
 } from "../time.js";
-import { mapWithConcurrency, setCacheHeaders } from "../api-helpers.js";
+import { mapWithConcurrency, sendJsonError, setCacheHeaders } from "../api-helpers.js";
 
 
 
@@ -58,6 +58,19 @@ function getDisplayName(profileData: any, fallback: string) {
   );
 }
 
+async function fetchSafe<T>(promise: Promise<T>) {
+  try {
+    return await promise;
+  } catch (error: any) {
+    return {
+      ok: false,
+      status: 503,
+      endpoint: null,
+      data: { error: error?.message ?? String(error) },
+    };
+  }
+}
+
 async function getUserBundle(
   key: string,
   user: { id: string },
@@ -67,24 +80,33 @@ async function getUserBundle(
   afterMonth: number,
   debug: boolean
 ) {
+  const upstreamForce = false;
   const [
     profile,
     recent,
+  ] = await Promise.all([
+    fetchSafe(statsfmFetch(`/users/${user.id}`, { force: upstreamForce })),
+    fetchSafe(fetchUserRecentStreams(user.id, { limit: 10 }, { force: upstreamForce })),
+  ]);
+
+  const [
     todayStats,
     weekStats,
     monthStats,
+  ] = await Promise.all([
+    fetchSafe(fetchUserStatsRange(user.id, afterToday, null, { force: upstreamForce })),
+    fetchSafe(fetchUserStatsRange(user.id, afterWeek, null, { force: upstreamForce })),
+    fetchSafe(fetchUserStatsRange(user.id, afterMonth, null, { force: upstreamForce })),
+  ]);
+
+  const [
     topArtists,
     topTracks,
     topAlbums,
   ] = await Promise.all([
-    statsfmFetch(`/users/${user.id}`, { force }),
-    fetchUserRecentStreams(user.id, { limit: 10 }, { force }),
-    fetchUserStatsRange(user.id, afterToday, null, { force }),
-    fetchUserStatsRange(user.id, afterWeek, null, { force }),
-    fetchUserStatsRange(user.id, afterMonth, null, { force }),
-    fetchUserTop(user.id, "artists", afterWeek, 5, { force }),
-    fetchUserTop(user.id, "tracks", afterWeek, 5, { force }),
-    fetchUserTop(user.id, "albums", afterWeek, 5, { force }),
+    fetchSafe(fetchUserTop(user.id, "artists", afterWeek, 5, { force: upstreamForce })),
+    fetchSafe(fetchUserTop(user.id, "tracks", afterWeek, 5, { force: upstreamForce })),
+    fetchSafe(fetchUserTop(user.id, "albums", afterWeek, 5, { force: upstreamForce })),
   ]);
 
   const profileData: any = profile.data;
@@ -99,18 +121,18 @@ async function getUserBundle(
   const displayName = getDisplayName(profileData, key);
   const profileRaw = profileData?.item ?? null;
   const recentItems = Array.isArray(recentData?.items)
-    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force, userId: user.id })
+    ? await enrichTrackItemsWithAlbumOwners(recentData.items, { force: upstreamForce, userId: user.id })
     : [];
   const topTrackItems = Array.isArray(tracksData?.items)
     ? await enrichTrackItemsWithAlbumOwners(tracksData.items, {
-        force,
+        force: upstreamForce,
         albumItems: Array.isArray(albumsData?.items) ? albumsData.items : [],
         userId: user.id,
         after: afterWeek,
       })
     : [];
   const topAlbumItems = Array.isArray(albumsData?.items)
-    ? await enrichAlbumItemsWithOwners(albumsData.items, { force })
+    ? await enrichAlbumItemsWithOwners(albumsData.items, { force: upstreamForce })
     : [];
   const recentItemRaw: any = recentItems[0] ?? null;
 
@@ -240,11 +262,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const afterWeek = getStartOfWeekSPMs();
   const afterMonth = getStartOfMonthSPMs();
 
-  const settled = await mapWithConcurrency(
-    users,
-    2,
-    ([key, user]) => getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug)
-  );
+  try {
+    const settled = await mapWithConcurrency(
+      users,
+      1,
+      ([key, user]) => getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug)
+    );
 
   const members = settled.map((result, index) => {
     if (result.status === "fulfilled") return result.value;
@@ -318,30 +341,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     : undefined;
 
-  setCacheHeaders(res, 60, force || debug);
+    setCacheHeaders(res, 60, debug, 600);
 
-  res.status(200).json({
-    ok: true,
-    source: "stats.fm-api",
-    generatedAt,
-    members,
-    rankings: {
-      today: rankingToday,
-      week: rankingWeek,
-      month: rankingMonth,
-    },
-    ...(debug
-      ? {
-          debug: {
-            timezone: TIMEZONE_SP,
-            afterToday,
-            afterWeek,
-            afterMonth,
-            generatedAt,
-            members: debugPayload?.members ?? [],
-            statsfm: getStatsfmHealthSnapshot(),
-          },
-        }
-      : {}),
-  });
+    return res.status(200).json({
+      ok: true,
+      source: "stats.fm-api",
+      generatedAt,
+      members,
+      rankings: {
+        today: rankingToday,
+        week: rankingWeek,
+        month: rankingMonth,
+      },
+      ...(debug
+        ? {
+            debug: {
+              timezone: TIMEZONE_SP,
+              afterToday,
+              afterWeek,
+              afterMonth,
+              generatedAt,
+              members: debugPayload?.members ?? [],
+              statsfm: getStatsfmHealthSnapshot(),
+            },
+          }
+        : {}),
+    });
+  } catch (error: any) {
+    return sendJsonError(res, 503, "group_failed", {
+      message: error?.message ?? String(error),
+    });
+  }
 }

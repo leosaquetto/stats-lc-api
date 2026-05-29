@@ -20,6 +20,7 @@ import topHandler from "../lib/api-handlers/top.js";
 import userFriendsHandler from "../lib/api-handlers/user-friends.js";
 import userStreamsHandler from "../lib/api-handlers/user-streams.js";
 import userHandler from "../lib/api-handlers/user.js";
+import { sendJsonError, setCorsHeaders } from "../lib/api-helpers.js";
 
 type Handler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -64,6 +65,8 @@ function getRoutePath(req: VercelRequest) {
 }
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
+  setCorsHeaders(res);
+
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
@@ -72,12 +75,20 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   const route = ROUTES[routePath];
 
   if (!route) {
-    return res.status(404).json({
-      ok: false,
-      error: "not_found",
-      path: routePath,
-    });
+    return sendJsonError(res, 404, "not_found", { path: routePath });
   }
 
-  return route(req, res);
+  try {
+    return Promise.resolve(route(req, res)).catch((error: any) =>
+      sendJsonError(res, 500, "handler_failed", {
+        path: routePath,
+        message: error?.message ?? String(error),
+      })
+    );
+  } catch (error: any) {
+    return sendJsonError(res, 500, "handler_failed", {
+      path: routePath,
+      message: error?.message ?? String(error),
+    });
+  }
 }
