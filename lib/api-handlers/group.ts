@@ -163,7 +163,7 @@ async function getUserBundle(
     : await enrichTrackItemsWithAlbumOwners(recentData.items, {
         force: upstreamForce,
         userId: user.id,
-        useTrackStreamEvidence: false,
+        useTrackStreamEvidence: true,
         requestTimeoutMs: Math.max(500, deadline - Date.now()),
       });
 
