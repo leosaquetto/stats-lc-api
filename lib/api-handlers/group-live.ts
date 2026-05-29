@@ -3,6 +3,7 @@ import { USERS } from "../users.js";
 import { extractUserPlatform, normalizeRecentItem } from "../normalize.js";
 import { statsfmFetch } from "../statsfm.js";
 import { fetchUserRecentStreams } from "../user-streams-service.js";
+import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 import { mapWithConcurrency, sendJsonError, setCacheHeaders } from "../api-helpers.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
@@ -66,9 +67,39 @@ async function getLiveUserBundle(
   const profileData: any = (profile as any).data;
   const profileRaw = profileData?.item ?? null;
   const recentData: any = (recent as any).data;
-  const recentItemRaw = Array.isArray(recentData?.items) ? recentData.items[0] ?? null : null;
+  const recentItems = Array.isArray(recentData?.items) ? recentData.items : [];
+
+  // Enrich recent item with correct album using track stream evidence
+  // Fallback to original items if enrichment fails (resilient)
+  let enrichedItems = recentItems;
+  let enrichmentWarning: string | null = null;
+
+  if (recentItems.length > 0) {
+    try {
+      enrichedItems = await enrichTrackItemsWithAlbumOwners(recentItems, {
+        force: upstreamForce,
+        userId: user.id,
+        useTrackStreamEvidence: true,
+        cacheProfile: "live",
+        requestTimeoutMs: 2000, // 2s timeout for enrichment
+      });
+    } catch (error: any) {
+      // Enrichment failed: use original items, add warning
+      enrichedItems = recentItems;
+      enrichmentWarning = "album_enrichment_failed";
+      if (debug) {
+        console.warn(`[group-live] enrichment failed for ${key}:`, error?.message ?? String(error));
+      }
+    }
+  }
+
+  const recentItemRaw = enrichedItems[0] ?? null;
   const nowPlayingRaw = recentItemRaw ? normalizeRecentItem(recentItemRaw) : null;
   const platformDecision = extractUserPlatform(profileRaw, key);
+
+  const warnings = [
+    ...(enrichmentWarning ? [enrichmentWarning] : []),
+  ].filter(Boolean);
 
   return {
     key,
@@ -97,6 +128,7 @@ async function getLiveUserBundle(
           },
         }
       : null,
+    ...(warnings.length > 0 ? { warnings } : {}),
     ...(debug
       ? {
           debug: {
