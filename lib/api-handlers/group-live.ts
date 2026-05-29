@@ -47,12 +47,15 @@ async function getLiveUserBundle(
   key: string,
   user: { id: string; platform?: string },
   force: boolean,
-  debug: boolean
+  debug: boolean,
+  includeProfile: boolean
 ) {
   const upstreamForce = false;
 
   const [profileResult, recentResult] = await Promise.all([
-    fetchSafe(statsfmFetch(`/users/${user.id}`, { force: upstreamForce })),
+    includeProfile
+      ? fetchSafe(statsfmFetch(`/users/${user.id}`, { force: upstreamForce, cacheProfile: "live" }))
+      : Promise.resolve({ ok: true, status: 200, endpoint: null, data: { item: null } }),
     fetchSafe(fetchUserRecentStreams(user.id, { limit: 1 }, { force: upstreamForce, cacheProfile: "live" })),
   ]);
 
@@ -67,7 +70,7 @@ async function getLiveUserBundle(
   const profileData: any = (profile as any).data;
   const profileRaw = profileData?.item ?? null;
   const recentData: any = (recent as any).data;
-  const recentItems = Array.isArray(recentData?.items) ? recentData.items : [];
+  const recentItems = Array.isArray(recentData?.items) ? recentData.items.slice(0, 1) : [];
 
   // Enrich recent item with correct album using track stream evidence
   // Fallback to original items if enrichment fails (resilient)
@@ -148,11 +151,12 @@ async function getLiveUserBundle(
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const force = req.query.force === "1";
   const debug = req.query.debug === "1";
+  const includeProfile = req.query.profile !== "0";
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string; platform?: string }]>;
 
   try {
-    const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
-      getLiveUserBundle(String(key), user, force, debug)
+    const settled = await mapWithConcurrency(users, Math.min(users.length, 5), ([key, user]) =>
+      getLiveUserBundle(String(key), user, force, debug, includeProfile)
     );
 
     const members = settled.map((result, index) => {

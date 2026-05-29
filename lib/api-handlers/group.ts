@@ -156,17 +156,22 @@ async function getUserBundle(
   const displayName = getDisplayName(profileData, key);
   const profileRaw = profileData?.item ?? null;
 
-  // Skip enrichment if deadline is close or no items
-  const skipEnrichment = (deadline - Date.now()) < 1000 || !Array.isArray(recentData?.items) || recentData.items.length === 0;
-  const recentItems = skipEnrichment
-    ? (Array.isArray(recentData?.items) ? recentData.items : [])
-    : await enrichTrackItemsWithAlbumOwners(recentData.items, {
+  const rawRecentItems = Array.isArray(recentData?.items) ? recentData.items.slice(0, 5) : [];
+  // Keep initial group load light: correct the current/recent head used by nowPlaying,
+  // while full timeline surfaces keep using resolveAlbums=1 on their own routes.
+  const skipEnrichment = (deadline - Date.now()) < 1000 || rawRecentItems.length === 0;
+  const enrichedRecentHead = skipEnrichment
+    ? []
+    : await enrichTrackItemsWithAlbumOwners(rawRecentItems.slice(0, 1), {
         force: upstreamForce,
         userId: user.id,
         useTrackStreamEvidence: true,
         trackStreamEvidenceStrategy: "latest",
-        requestTimeoutMs: Math.max(500, deadline - Date.now()),
+        requestTimeoutMs: Math.min(1500, Math.max(500, deadline - Date.now())),
       });
+  const recentItems = enrichedRecentHead.length > 0
+    ? [enrichedRecentHead[0], ...rawRecentItems.slice(1)]
+    : rawRecentItems;
 
   const topTrackItems = Array.isArray(tracksData?.items)
     ? tracksData.items
@@ -313,7 +318,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const settled = await mapWithConcurrency(
       users,
-      1, // Reduced to 1 for safer execution
+      2,
       ([key, user]) => getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug, deadline)
     );
 

@@ -45,9 +45,17 @@ If a future optimization touches any of these paths, it must verify album correc
 Live now should stay lightweight:
 
 - First use the `albumId` already present on the recent stream row.
+- Clamp recent upstream results to the single row used by `nowPlaying`; stats.fm may return more items than requested.
 - Only use track-stream evidence when the direct stream album is missing or insufficient.
 - For live/recent surfaces, track-stream evidence must prefer the latest stream row, not the historical majority. The user is asking "what is this current/recent play?", so a single/video album that won historically must not override the most recent album evidence.
+- Polling clients that already have `/api/group` profile data should call `/api/group-live?profile=0` so live refresh does not wait on user profile lookups.
 - Avoid broad album scans in live polling.
+
+Home/group initial load should not enrich every recent row:
+
+- `/api/group` may enrich only the first recent item because that item powers `nowPlaying` and the primary vinyl.
+- Full user-visible history/timeline correction belongs to `/api/user-streams?resolveAlbums=1`, `/api/recent?resolveAlbums=1`, and `/api/entity-streams?resolveAlbums=1`.
+- Do not make initial Home rendering wait for expensive album resolution on recent rows that are not immediately shown as the current play.
 
 History/timeline can opt in with `resolveAlbums=1`:
 
