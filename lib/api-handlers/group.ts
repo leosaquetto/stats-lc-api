@@ -24,7 +24,7 @@ import {
   getStartOfWeekSPMs,
   TIMEZONE_SP,
 } from "../time.js";
-import { mapWithConcurrency, sendJsonError, setCacheHeaders } from "../api-helpers.js";
+import { mapWithConcurrency, sendJsonError, setCacheHeaders, setCorsHeaders } from "../api-helpers.js";
 
 
 
@@ -82,7 +82,18 @@ async function getUserBundle(
   deadline: number
 ) {
   const upstreamForce = false;
-  const timeoutMs = Math.max(1000, deadline - Date.now());
+  const timeoutMs = Math.max(500, deadline - Date.now());
+
+  // Early bailout if deadline already passed
+  if (Date.now() >= deadline) {
+    return {
+      key,
+      id: user.id,
+      profile: { displayName: String(key), username: null, image: null },
+      warnings: ["deadline_exceeded_before_start"],
+      error: "deadline_exceeded",
+    };
+  }
 
   const [
     profile,
@@ -92,25 +103,46 @@ async function getUserBundle(
     fetchSafe(fetchUserRecentStreams(user.id, { limit: 5 }, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
   ]);
 
+  // Check deadline after profile/recent
+  const remainingMs = deadline - Date.now();
+  if (remainingMs < 500) {
+    const profileData: any = profile.data;
+    return {
+      key,
+      id: user.id,
+      profile: {
+        displayName: getDisplayName(profileData, key),
+        username: profileData?.item?.username ?? null,
+        image: profileData?.item?.image ?? null,
+      },
+      warnings: ["deadline_exceeded_after_profile"],
+      errors: { profile: profile.ok ? null : profile },
+    };
+  }
+
   const [
     todayStats,
     weekStats,
     monthStats,
   ] = await Promise.all([
-    fetchSafe(fetchUserStatsRange(user.id, afterToday, null, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
-    fetchSafe(fetchUserStatsRange(user.id, afterWeek, null, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
-    fetchSafe(fetchUserStatsRange(user.id, afterMonth, null, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
+    fetchSafe(fetchUserStatsRange(user.id, afterToday, null, { force: upstreamForce, requestTimeoutMs: Math.max(500, deadline - Date.now()) })),
+    fetchSafe(fetchUserStatsRange(user.id, afterWeek, null, { force: upstreamForce, requestTimeoutMs: Math.max(500, deadline - Date.now()) })),
+    fetchSafe(fetchUserStatsRange(user.id, afterMonth, null, { force: upstreamForce, requestTimeoutMs: Math.max(500, deadline - Date.now()) })),
   ]);
 
-  const [
-    topArtists,
-    topTracks,
-    topAlbums,
-  ] = await Promise.all([
-    fetchSafe(fetchUserTop(user.id, "artists", afterWeek, 3, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
-    fetchSafe(fetchUserTop(user.id, "tracks", afterWeek, 3, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
-    fetchSafe(fetchUserTop(user.id, "albums", afterWeek, 3, { force: upstreamForce, requestTimeoutMs: timeoutMs })),
-  ]);
+  // Skip tops if deadline is close
+  let topArtists: any = { ok: false, data: { items: [] } };
+  let topTracks: any = { ok: false, data: { items: [] } };
+  let topAlbums: any = { ok: false, data: { items: [] } };
+  const skipTops = (deadline - Date.now()) < 1000;
+
+  if (!skipTops) {
+    [topArtists, topTracks, topAlbums] = await Promise.all([
+      fetchSafe(fetchUserTop(user.id, "artists", afterWeek, 3, { force: upstreamForce, requestTimeoutMs: Math.max(500, deadline - Date.now()) })),
+      fetchSafe(fetchUserTop(user.id, "tracks", afterWeek, 3, { force: upstreamForce, requestTimeoutMs: Math.max(500, deadline - Date.now()) })),
+      fetchSafe(fetchUserTop(user.id, "albums", afterWeek, 3, { force: upstreamForce, requestTimeoutMs: Math.max(500, deadline - Date.now()) })),
+    ]);
+  }
 
   const profileData: any = profile.data;
   const recentData: any = recent.data;
@@ -123,14 +155,18 @@ async function getUserBundle(
 
   const displayName = getDisplayName(profileData, key);
   const profileRaw = profileData?.item ?? null;
-  const recentItems = Array.isArray(recentData?.items)
-    ? await enrichTrackItemsWithAlbumOwners(recentData.items, {
+
+  // Skip enrichment if deadline is close or no items
+  const skipEnrichment = (deadline - Date.now()) < 1000 || !Array.isArray(recentData?.items) || recentData.items.length === 0;
+  const recentItems = skipEnrichment
+    ? (Array.isArray(recentData?.items) ? recentData.items : [])
+    : await enrichTrackItemsWithAlbumOwners(recentData.items, {
         force: upstreamForce,
         userId: user.id,
         useTrackStreamEvidence: false,
-        requestTimeoutMs: timeoutMs,
-      })
-    : [];
+        requestTimeoutMs: Math.max(500, deadline - Date.now()),
+      });
+
   const topTrackItems = Array.isArray(tracksData?.items)
     ? tracksData.items
     : [];
@@ -241,7 +277,11 @@ async function getUserBundle(
       albums: topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")),
     },
 
-    warnings: Date.now() > deadline ? ["deadline_exceeded"] : [],
+    warnings: [
+      ...(Date.now() > deadline ? ["deadline_exceeded"] : []),
+      ...(skipTops ? ["tops_skipped"] : []),
+      ...(skipEnrichment ? ["enrichment_skipped"] : []),
+    ],
 
     ...(debugData ? { debug: debugData } : {}),
 
@@ -267,12 +307,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const afterWeek = getStartOfWeekSPMs();
   const afterMonth = getStartOfMonthSPMs();
 
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + 7000; // 7s internal deadline
 
   try {
     const settled = await mapWithConcurrency(
       users,
-      2,
+      1, // Reduced to 1 for safer execution
       ([key, user]) => getUserBundle(String(key), user, force, afterToday, afterWeek, afterMonth, debug, deadline)
     );
 
@@ -352,6 +392,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     : undefined;
 
     setCacheHeaders(res, 60, debug, 600);
+    setCorsHeaders(res);
 
     const hasWarnings = members.some((m: any) => m.warnings?.length > 0);
     const hasErrors = members.some((m: any) => m.error);
@@ -383,6 +424,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   } catch (error: any) {
     console.error("[group] handler failed:", error);
+    setCorsHeaders(res);
     return sendJsonError(res, 503, "group_failed", {
       message: error?.message ?? String(error),
     });
