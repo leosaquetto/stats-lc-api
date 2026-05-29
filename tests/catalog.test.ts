@@ -111,6 +111,9 @@ function createResponseCapture() {
   };
 
   const res = {
+    setHeader() {
+      return this;
+    },
     status(code: number) {
       captured.statusCode = code;
       return this;

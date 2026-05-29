@@ -1,0 +1,78 @@
+# Track Album Resolution Rule
+
+This document records a non-negotiable normalization rule for stats-lc-api.
+
+## Problem
+
+stats.fm can expose different album data for the same track depending on the surface:
+
+- Public track/catalog metadata can point to a single, EP, video, or otherwise incorrect album.
+- User stream history can contain the album that was actually listened to.
+- Album stream pages can show a track under the correct user-history album even when the public track page does not.
+
+Because of this, the API must not trust only `track.album`, `track.albums[0]`, or public `/tracks/:id` metadata when returning user-facing track payloads.
+
+## Rule
+
+For user-scoped track payloads, prefer the album from the user's listening history over the public catalog-assigned album.
+
+The correct album evidence order is:
+
+1. Stream row `albumId`, when present.
+2. `/users/:userId/streams/tracks/:trackId` evidence for the requested user/range.
+3. `/users/:userId/streams/albums/:albumId` evidence from candidate albums in the same user/range.
+4. Existing album detail/owner enrichment.
+5. Public catalog album as fallback only.
+
+Once the real album is found, apply it before normalization so `albumId`, `albumName`, `album.artistName`, `album.primaryArtistName`, `primaryArtistName`, and secondary artist selection all derive from the corrected album.
+
+## Surfaces That Must Keep This
+
+These surfaces must preserve album correction:
+
+- `/api/group-live` for live now/reproduzindo agora.
+- `/api/user-streams?resolveAlbums=1` for timeline/history.
+- `/api/recent?resolveAlbums=1` for recent history.
+- `/api/entity-streams?resolveAlbums=1` for track/entity history modals.
+- `/api/top?type=tracks` for top tracks.
+- `/api/replay` for replay track lists.
+- `/api/compare` for compared top tracks.
+
+If a future optimization touches any of these paths, it must verify album correction still applies.
+
+## Performance Guidance
+
+Live now should stay lightweight:
+
+- First use the `albumId` already present on the recent stream row.
+- Only use track-stream evidence when the direct stream album is missing or insufficient.
+- Avoid broad album scans in live polling.
+
+History/timeline can opt in with `resolveAlbums=1`:
+
+- Use this for user-visible history where wrong album IDs are noticeable.
+- Keep it explicit so bulk background history fetches can make a conscious performance choice.
+
+Top/replay/compare should use user/range evidence because these surfaces influence artist ownership and ranking display.
+
+## Regression Examples
+
+Known examples that motivated this rule:
+
+- Track `355354351` / "Choka Choka" can be assigned to a single publicly, but user history can place it under album `66372189` / `EQUILIBRIVM`.
+- Track `1293521` / "Lucky" can be assigned to a video/single publicly, but user history can place it under album `55979903` / `Oops!... I Did It Again (25th Anniversary Edition)`.
+
+The exact IDs may change with upstream data, but the rule must remain: user stream album evidence wins over public track catalog metadata.
+
+## Implementation Pointers
+
+Current central logic lives in:
+
+- `lib/track-album-enrichment.ts`
+- `lib/user-streams-service.ts`
+- `lib/user-tops-service.ts`
+
+Current regression coverage lives in:
+
+- `tests/stats-extra.test.ts`
+

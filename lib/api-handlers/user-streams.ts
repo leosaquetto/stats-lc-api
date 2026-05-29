@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
 
   const limit = Number(params.limit || 0);
-  const upstreamForce = force && !resolveAlbums && limit <= 50;
+  const upstreamForce = force && limit <= 50;
 
   try {
     const result = await fetchUserStreams(userId, params, { force: upstreamForce });

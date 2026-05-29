@@ -26,6 +26,8 @@ Represents **catalog availability** for the track.
 
 - `externalIds` **must not** be used alone to infer playback source/platform origin.
 
+Album selection for user-scoped track payloads has its own durable rule in [`docs/track-album-resolution.md`](./track-album-resolution.md). In short: user stream album evidence wins over public track catalog metadata.
+
 ## stats.fm Resilience
 
 `statsfmFetch(path, { force })` remains the only upstream entrypoint and keeps the same public success/error shape consumed by the handlers.

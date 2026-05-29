@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
 import entityGroupStatsHandler from "../lib/api-handlers/entity-group-stats.ts";
+import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
 import groupLiveHandler from "../lib/api-handlers/group-live.ts";
 import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
+import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import {
   enrichAlbumItemsWithOwners,
@@ -30,6 +32,9 @@ function createResponseCapture() {
   };
 
   const res = {
+    setHeader() {
+      return this;
+    },
     status(code: number) {
       captured.statusCode = code;
       return this;
@@ -217,6 +222,106 @@ test("group-live uses stream album id to correct live now track album", async ()
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.members[0].nowPlaying.track.albumId, "album-main");
   assert.equal(captured.body.members[0].nowPlaying.track.albumName, "Main Album");
+});
+
+test("user-streams can resolve historical stream albums", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/streams")) {
+      return jsonResponse({
+        items: [
+          {
+            id: "stream-1",
+            albumId: "album-main",
+            track: {
+              id: "track-1",
+              name: "History Song",
+              artists: [{ id: "artist-1", name: "Main Artist" }],
+              albums: [{ id: "single-1", name: "Wrong Single" }],
+            },
+          },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/album-main")) {
+      return jsonResponse({
+        item: {
+          id: "album-main",
+          name: "Main Album",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await userStreamsHandler({
+    query: {
+      user: "leo",
+      limit: "1",
+      resolveAlbums: "1",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.items[0].track.albumId, "album-main");
+  assert.equal(captured.body.items[0].track.albumName, "Main Album");
+});
+
+test("entity-streams can resolve historical stream albums when requested", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/streams/tracks/track-1")) {
+      return jsonResponse({
+        items: [
+          {
+            id: "stream-1",
+            albumId: "album-main",
+            track: {
+              id: "track-1",
+              name: "History Song",
+              artists: [{ id: "artist-1", name: "Main Artist" }],
+              albums: [{ id: "single-1", name: "Wrong Single" }],
+            },
+          },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/album-main")) {
+      return jsonResponse({
+        item: {
+          id: "album-main",
+          name: "Main Album",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await entityStreamsHandler({
+    query: {
+      user: "leo",
+      type: "track",
+      id: "track-1",
+      limit: "1",
+      resolveAlbums: "1",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.items[0].track.albumId, "album-main");
+  assert.equal(captured.body.items[0].track.albumName, "Main Album");
 });
 
 test("entity-group-stats returns per-member stats and tolerates partial failures", async () => {

@@ -14,6 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = readQueryString(req.query.id);
   const user = readQueryString(req.query.user);
   const force = req.query.force === "1";
+  const resolveAlbums = req.query.resolveAlbums === "1";
 
   if (!type || !id || !user) {
     return res.status(400).json({ ok: false, error: "missing_type_id_or_user" });
@@ -33,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
-  setCacheHeaders(res, 300, force);
+  setCacheHeaders(res, resolveAlbums ? 600 : 300, force, resolveAlbums ? 3600 : 1800);
 
   res.status(200).json({
     ok: true,
@@ -45,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     items: await normalizeStreamItems(result.data, {
       force,
       userId,
-      useTrackStreamEvidence: false,
+      useTrackStreamEvidence: resolveAlbums,
     }),
   });
 }
