@@ -10,7 +10,7 @@ import { resolveUserId } from "../users.js";
 import { fetchUserStatsRange, normalizeStatsSummary } from "../user-stats-service.js";
 import { fetchUserTop, normalizeTopItems } from "../user-tops-service.js";
 
-const VALID_PERIODS = ["today", "week", "month", "year", "all"] as const;
+const VALID_PERIODS = ["today", "week", "month", "year", "all", "lifetime"] as const;
 type ReplayPeriod = typeof VALID_PERIODS[number];
 type ReplayTopType = "artists" | "tracks" | "albums";
 
@@ -56,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ ok: false, error: "invalid_period" });
   }
 
-  const period = requestedPeriod;
+  const period = requestedPeriod === "lifetime" ? "all" : requestedPeriod;
   const userId = resolveUserId(userInput);
   const after = getAfterFromPeriod(period);
 
