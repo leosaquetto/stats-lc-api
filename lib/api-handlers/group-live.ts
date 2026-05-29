@@ -80,6 +80,7 @@ async function getLiveUserBundle(
         force: upstreamForce,
         userId: user.id,
         useTrackStreamEvidence: true,
+        trackStreamEvidenceStrategy: "latest",
         cacheProfile: "live",
         requestTimeoutMs: 2000, // 2s timeout for enrichment
       });

@@ -46,6 +46,7 @@ Live now should stay lightweight:
 
 - First use the `albumId` already present on the recent stream row.
 - Only use track-stream evidence when the direct stream album is missing or insufficient.
+- For live/recent surfaces, track-stream evidence must prefer the latest stream row, not the historical majority. The user is asking "what is this current/recent play?", so a single/video album that won historically must not override the most recent album evidence.
 - Avoid broad album scans in live polling.
 
 History/timeline can opt in with `resolveAlbums=1`:
@@ -53,7 +54,7 @@ History/timeline can opt in with `resolveAlbums=1`:
 - Use this for user-visible history where wrong album IDs are noticeable.
 - Keep it explicit so bulk background history fetches can make a conscious performance choice.
 
-Top/replay/compare should use user/range evidence because these surfaces influence artist ownership and ranking display.
+Top/replay/compare should use user/range evidence because these surfaces influence artist ownership and ranking display. For aggregate surfaces, historical/range majority can still be the right signal.
 
 ## Regression Examples
 
@@ -75,4 +76,3 @@ Current central logic lives in:
 Current regression coverage lives in:
 
 - `tests/stats-extra.test.ts`
-

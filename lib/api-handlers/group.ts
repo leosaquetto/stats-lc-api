@@ -164,6 +164,7 @@ async function getUserBundle(
         force: upstreamForce,
         userId: user.id,
         useTrackStreamEvidence: true,
+        trackStreamEvidenceStrategy: "latest",
         requestTimeoutMs: Math.max(500, deadline - Date.now()),
       });
 

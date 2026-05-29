@@ -605,6 +605,53 @@ test("track stream evidence can replace top track album without top album match"
   assert.equal(track.albumName, "Main Album");
 });
 
+test("latest track stream evidence can prefer current album over historical majority", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/users/user-1/streams/tracks/track-1")) {
+      return jsonResponse({
+        items: [
+          { trackId: "track-1", albumId: "album-main" },
+          { trackId: "track-1", albumId: "single-1" },
+          { trackId: "track-1", albumId: "single-1" },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/album-main")) {
+      return jsonResponse({
+        item: {
+          id: "album-main",
+          name: "Main Album",
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [item] = await enrichTrackItemsWithAlbumOwners([
+    {
+      track: {
+        id: "track-1",
+        name: "Song From Single",
+        artists: [{ id: "artist-1", name: "Main Artist" }],
+        albums: [{ id: "single-1", name: "Wrong Single" }],
+      },
+    },
+  ], {
+    userId: "user-1",
+    useTrackStreamEvidence: true,
+    trackStreamEvidenceStrategy: "latest",
+  });
+
+  const track = normalizeTopItem(item, "tracks") as any;
+  assert.equal(track.albumId, "album-main");
+  assert.equal(track.albumName, "Main Album");
+});
+
 test("stream row album id replaces recent track album with album detail", async () => {
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));

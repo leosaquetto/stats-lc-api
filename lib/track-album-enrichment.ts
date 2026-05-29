@@ -9,6 +9,7 @@ type TrackAlbumEvidenceOptions = FetchOptions & {
   after?: number | string | null;
   before?: number | string | null;
   useTrackStreamEvidence?: boolean;
+  trackStreamEvidenceStrategy?: "majority" | "latest";
 };
 
 function readText(value: unknown) {
@@ -165,6 +166,7 @@ async function fetchAlbumDetails(albumIds: string[], options: FetchOptions) {
       const result = await statsfmFetch(`/albums/${encodeSegment(id)}`, {
         force: options.force,
         cacheProfile: options.cacheProfile,
+        requestTimeoutMs: options.requestTimeoutMs,
       });
 
       if (!result.ok) return null;
@@ -175,6 +177,7 @@ async function fetchAlbumDetails(albumIds: string[], options: FetchOptions) {
       const tracksResult = await statsfmFetch(`/albums/${encodeSegment(id)}/tracks?limit=50`, {
         force: options.force,
         cacheProfile: options.cacheProfile,
+        requestTimeoutMs: options.requestTimeoutMs,
       });
       if (!tracksResult.ok) return album;
 
@@ -226,6 +229,7 @@ async function fetchStreamAlbumEvidence(
         {
           force: options.force,
           cacheProfile: options.cacheProfile,
+          requestTimeoutMs: options.requestTimeoutMs,
         }
       );
       if (!result.ok) return;
@@ -264,12 +268,22 @@ async function fetchTrackStreamAlbumEvidence(
         {
           force: options.force,
           cacheProfile: options.cacheProfile,
+          requestTimeoutMs: options.requestTimeoutMs,
         }
       );
       if (!result.ok) return;
 
+      const streams = Array.isArray((result.data as any)?.items) ? (result.data as any).items : [];
+      if (options.trackStreamEvidenceStrategy === "latest") {
+        const latestAlbumId = streams
+          .map((stream: any) => stream?.albumId == null ? null : String(stream.albumId))
+          .find(Boolean);
+        if (latestAlbumId) albumIdByTrackId.set(trackId, latestAlbumId);
+        return;
+      }
+
       const counts = new Map<string, number>();
-      for (const stream of Array.isArray((result.data as any)?.items) ? (result.data as any).items : []) {
+      for (const stream of streams) {
         const albumId = stream?.albumId == null ? null : String(stream.albumId);
         if (!albumId) continue;
         counts.set(albumId, (counts.get(albumId) ?? 0) + 1);
