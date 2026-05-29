@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
 import { fetchUserDatesRange, normalizeDatesSummary } from "../user-stats-service.js";
-import { sendJsonError, setCacheHeaders } from "../api-helpers.js";
+import { sendJsonError, setCacheHeaders, setCorsHeaders } from "../api-helpers.js";
 
 function isLifetimeRequest(after: string) {
   return after === "0";
@@ -33,12 +33,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const result = await fetchUserDatesRange(userId, after, before, fetchOptions);
 
     if (!result.ok) {
+      // Treat 404 as empty data (upstream endpoint doesn't exist for this user/period)
+      if (result.status === 404) {
+        setCorsHeaders(res);
+        setCacheHeaders(res, lifetime ? 900 : 120, lifetime ? false : force, lifetime ? 86400 : 720);
+        return res.status(200).json({
+          ok: true,
+          user,
+          userId,
+          endpoint: result.endpoint,
+          empty: true,
+          reason: "upstream_not_found",
+          items: [],
+          dates: [],
+          buckets: {},
+        });
+      }
+
       return sendJsonError(res, result.status === 504 ? 503 : result.status || 502, "upstream_error", {
         endpoint: result.endpoint,
         upstreamStatus: result.status,
       });
     }
 
+    setCorsHeaders(res);
     setCacheHeaders(res, lifetime ? 900 : 120, lifetime ? false : force, lifetime ? 86400 : 720);
     return res.status(200).json({
       ok: true,
