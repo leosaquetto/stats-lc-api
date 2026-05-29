@@ -95,7 +95,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | Endpoint | Query | Purpose | Response highlights |
 | --- | --- | --- | --- |
 | `/api/search` | `q=<query>` or `query=<query>`, optional `type=track,artist,album,user`, `limit`, `force=1` | Typed search facade. | `items[]` shaped as `{ type, item }`, with normalized track/artist/album/user payloads when recognized. |
-| `/api/compare` | `users=<csv>` with 2 to 5 aliases or stats.fm IDs/custom IDs, optional `period=4w|6m|all|month|week`, explicit `after`/`before` epoch ms, `limit` default `250` max `500`, `force=1` | Rich comparison across users. | `users`, `summaryByUser`, `common.tracks|artists|albums|genres`, `timeByUser`, `firstStreamsByUser`, `lastStreamsByUser`, and per-user partial `errors`. Explicit `after` takes priority over `period`; presets are calculated in the Sao Paulo timezone. Common rows match entity `id` first and `externalIds.spotify/appleMusic` as catalog fallback, expose original per-user ranks, `score`, and `sharedByCount`. |
+| `/api/compare` | `users=<csv>` with 2 to 5 aliases or stats.fm IDs/custom IDs, optional `period=4w|6m|all|month|week`, explicit `after`/`before` epoch ms, `limit` default `250` max `500`, `commonMode=any|all`, `minSharedBy=2..userCount`, `force=1` | Rich comparison across users. | `users`, `summaryByUser`, `commonFilter`, `common.tracks|artists|albums|genres`, `timeByUser`, `firstStreamsByUser`, `lastStreamsByUser`, and per-user partial `errors`. Explicit `after` takes priority over `period`; presets are calculated in the Sao Paulo timezone. Common rows match entity `id` first and `externalIds.spotify/appleMusic` as catalog fallback, expose original per-user ranks, `score`, and `sharedByCount`. By default common rows are shared by at least 2 users; `commonMode=all` requires every requested user, and `minSharedBy` can set an explicit threshold. |
 
 ### Common response conventions
 
@@ -143,7 +143,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 
 - Add a dedicated `/api/top-genres` endpoint if genre pages or genre-only widgets become first-class UI surfaces. Today genres are consumed by `/api/compare` through upstream `top/genres`, but there is no standalone public genre endpoint.
 - Tune the `/api/compare` scoring formula with real user examples. The current score is transparent and better than a black-box rank, but it may need weights for rank proximity, minimum shared volume, and balance after UI review.
-- Add a query option to `/api/compare` such as `commonMode=all|any` or `minSharedBy=2`, so the backend can pre-filter common rows for two-user and group comparisons.
+- Tune frontend usage of `/api/compare` with `commonMode=all|any` and `minSharedBy=2..userCount` so group comparison screens can choose strict or loose affinity without client-side filtering.
 - Add `order`/cursor semantics to `/api/user-streams` and `/api/entity-streams` if the upstream supports stable pagination for "first" and "last" streams.
 - Promote the temporary test loader setup into a repo-supported test command or tsconfig/build path. Right now local tests need a loader because source imports use `.js` while files are `.ts`.
 - Add response-size guardrails for `/api/compare` when `limit` is high and user count is near the maximum, especially before exposing large ranges broadly in production.

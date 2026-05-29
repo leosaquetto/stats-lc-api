@@ -37,6 +37,10 @@ const DEFAULT_LIMIT = 250;
 const MAX_LIMIT = 500;
 const MAX_USERS = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
+type CommonFilter = {
+  mode: "any" | "all";
+  minSharedBy: number;
+};
 
 function readNumber(value: unknown) {
   const raw = readOptionalQueryString(value);
@@ -49,6 +53,19 @@ function readNumber(value: unknown) {
 function clampLimit(value: unknown) {
   const parsed = readNumber(value) ?? DEFAULT_LIMIT;
   return Math.min(MAX_LIMIT, Math.max(1, Math.floor(parsed)));
+}
+
+function resolveCommonFilter(req: VercelRequest, userCount: number): CommonFilter {
+  const requestedMode = readQueryString(req.query.commonMode || "any");
+  const mode = requestedMode === "all" ? "all" : "any";
+  const requestedMinSharedBy = readNumber(req.query.minSharedBy);
+  const fallbackMinSharedBy = mode === "all" ? userCount : 2;
+  const minSharedBy = Math.min(
+    userCount,
+    Math.max(2, Math.floor(requestedMinSharedBy ?? fallbackMinSharedBy))
+  );
+
+  return { mode, minSharedBy };
 }
 
 function addMonths(timestamp: number, delta: number) {
@@ -198,7 +215,12 @@ function scoreCommon(perUserEntries: any[]) {
   return totalStreams + minStreams * 3 + balance * 100 + rankStrength * 1000;
 }
 
-function buildCommonRows(kind: CommonKind, userIds: string[], perUserItems: Record<string, any[]>) {
+function buildCommonRows(
+  kind: CommonKind,
+  userIds: string[],
+  perUserItems: Record<string, any[]>,
+  filter: CommonFilter
+) {
   const rowsByKey = new Map<string, any>();
   const aliasByKey = new Map<string, string>();
 
@@ -238,7 +260,7 @@ function buildCommonRows(kind: CommonKind, userIds: string[], perUserItems: Reco
   }
 
   return [...rowsByKey.values()]
-    .filter((row) => row.sharedByCount >= 2)
+    .filter((row) => row.sharedByCount >= filter.minSharedBy)
     .map((row) => {
       const entries = Object.values(row.byUser) as any[];
       return {
@@ -354,6 +376,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const limit = clampLimit(req.query.limit);
   const force = req.query.force === "1";
   const range = resolveRange(req);
+  const commonFilter = resolveCommonFilter(req, users.length);
 
   if (users.length < 2) {
     return res.status(400).json({ ok: false, error: "missing_users" });
@@ -409,13 +432,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     generatedAt: new Date().toISOString(),
     range,
     limit,
+    commonFilter,
     users: userData.map(({ input, userId, profile }) => ({ input, userId, profile })),
     summaryByUser: Object.fromEntries(userData.map((user) => [user.userId, user.summary])),
     common: {
-      tracks: buildCommonRows("tracks", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.tracks]))),
-      artists: buildCommonRows("artists", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.artists]))),
-      albums: buildCommonRows("albums", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.albums]))),
-      genres: buildCommonRows("genres", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.genres]))),
+      tracks: buildCommonRows("tracks", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.tracks])), commonFilter),
+      artists: buildCommonRows("artists", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.artists])), commonFilter),
+      albums: buildCommonRows("albums", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.albums])), commonFilter),
+      genres: buildCommonRows("genres", userIds, Object.fromEntries(userData.map((user) => [user.userId, user.tops.genres])), commonFilter),
     },
     timeByUser: Object.fromEntries(userData.map((user) => [user.userId, user.time])),
     firstStreamsByUser: Object.fromEntries(userData.map((user) => [user.userId, user.firstStreams])),

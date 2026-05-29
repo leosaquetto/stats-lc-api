@@ -300,6 +300,38 @@ test("compare supports more than two users without requiring all users to share 
   assert.equal(Object.keys(commonArtist.byUser).includes("raw-user"), false);
 });
 
+test("compare can require all users or an explicit shared count", async () => {
+  setupCompareFetch();
+
+  const all = createResponseCapture();
+  await compareHandler({
+    query: {
+      users: "leo,peter,raw-user",
+      after: "1000",
+      before: "2000",
+      commonMode: "all",
+    },
+  } as any, all.res);
+
+  const minShared = createResponseCapture();
+  await compareHandler({
+    query: {
+      users: "leo,peter,raw-user",
+      after: "1000",
+      before: "2000",
+      minSharedBy: "2",
+    },
+  } as any, minShared.res);
+
+  assert.equal(all.captured.statusCode, 200);
+  assert.equal(all.captured.body.commonFilter.mode, "all");
+  assert.equal(all.captured.body.commonFilter.minSharedBy, 3);
+  assert.equal(all.captured.body.common.artists.length, 0);
+  assert.equal(minShared.captured.body.commonFilter.mode, "any");
+  assert.equal(minShared.captured.body.commonFilter.minSharedBy, 2);
+  assert.equal(minShared.captured.body.common.artists[0].sharedByCount, 2);
+});
+
 test("compare period presets are dynamic and explicit after takes priority", async () => {
   setupCompareFetch();
 
