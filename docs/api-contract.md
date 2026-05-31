@@ -79,6 +79,8 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | `/api/user-streams` | `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | Stream history page data. | Normalized stream `items` for `/users/:id/streams`. |
 | `/api/user-friends` | `user=<user>`, optional `force=1` | Friends page data. | Normalized friend `items` plus best-effort `count`; count lookup failure is isolated under `errors.count`. |
 
+`/api/lyrics` returns `hasLyrics: false` with `reason: "not_configured"` when `GENIUS_ACCESS_TOKEN` is missing, so clients can hide lyrics UI without treating that as a hard API failure.
+
 ### Entity and catalog endpoints
 
 | Endpoint | Query | Purpose | Response highlights |
