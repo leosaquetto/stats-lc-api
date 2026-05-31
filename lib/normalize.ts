@@ -210,6 +210,29 @@ export function extractServiceCandidate(obj: any) {
 }
 
 
+const HIDDEN_ARTIST_NAMES = new Set(["various artists"]);
+
+function canonicalText(value: unknown) {
+  return typeof value === "string"
+    ? value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+    : "";
+}
+
+export function isHiddenArtist(artist: any) {
+  const name = typeof artist === "string" ? artist : artist?.name;
+  return HIDDEN_ARTIST_NAMES.has(canonicalText(name));
+}
+
+function pickFirstVisibleArtistName(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    if (isHiddenArtist(value)) continue;
+    return value;
+  }
+
+  return null;
+}
+
 export function normalizeArtist(artist: any) {
   const externalIds = normalizeExternalIds(artist);
   const spotifyId = pickFirstNonEmpty(artist?.spotifyId, externalIds.spotify[0]);
@@ -234,9 +257,7 @@ export function normalizeArtist(artist: any) {
 }
 
 function normalizedText(value: unknown) {
-  return typeof value === "string"
-    ? value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
-    : "";
+  return canonicalText(value);
 }
 
 function sameArtist(a: any, b: any) {
@@ -254,20 +275,22 @@ function sameArtist(a: any, b: any) {
 function pickAlbumOwner(album: any) {
   if (!album || typeof album !== "object") return null;
 
-  if (album.artist && typeof album.artist === "object") {
+  if (album.artist && typeof album.artist === "object" && !isHiddenArtist(album.artist)) {
     return normalizeArtist(album.artist);
   }
 
-  const firstArtist = Array.isArray(album.artists) ? album.artists.find(Boolean) : null;
+  const firstArtist = Array.isArray(album.artists)
+    ? album.artists.find((artist: any) => artist && !isHiddenArtist(artist))
+    : null;
   if (firstArtist && typeof firstArtist === "object") {
     return normalizeArtist(firstArtist);
   }
 
-  if (album.primaryArtist && typeof album.primaryArtist === "object") {
+  if (album.primaryArtist && typeof album.primaryArtist === "object" && !isHiddenArtist(album.primaryArtist)) {
     return normalizeArtist(album.primaryArtist);
   }
 
-  const name = pickFirstNonEmpty(
+  const name = pickFirstVisibleArtistName(
     album.primaryArtistName,
     album.artistName,
     typeof album.artist === "string" ? album.artist : null,
@@ -284,7 +307,7 @@ function pickPrimaryArtist(artists: any[], album: any, rawArtists: any[] = []) {
   const albumCandidates = [
     album?.artist,
     ...(Array.isArray(album?.artists) ? album.artists : []),
-  ].filter(Boolean);
+  ].filter((artist) => artist && !isHiddenArtist(artist));
 
   for (const candidate of albumCandidates) {
     const normalizedCandidate = typeof candidate === "string"
@@ -300,7 +323,7 @@ function pickPrimaryArtist(artists: any[], album: any, rawArtists: any[] = []) {
     artist?.role === "main" ||
     artist?.role === "primary"
   );
-  if (markedRawArtist) {
+  if (markedRawArtist && !isHiddenArtist(markedRawArtist)) {
     const normalizedMarked = normalizeArtist(markedRawArtist);
     const match = artists.find((artist) => sameArtist(artist, normalizedMarked));
     if (match) return match;
@@ -315,7 +338,9 @@ export function normalizeAlbum(album: any) {
   const appleMusicId = pickFirstNonEmpty(album?.appleMusicId, externalIds.appleMusic[0]);
 
   const artists = Array.isArray(album?.artists)
-    ? album.artists.map((artist: any) => normalizeArtist(artist))
+    ? album.artists
+        .filter((artist: any) => !isHiddenArtist(artist))
+        .map((artist: any) => normalizeArtist(artist))
     : [];
   const primaryArtist = artists[0] ?? pickAlbumOwner(album);
 
@@ -329,10 +354,10 @@ export function normalizeAlbum(album: any) {
     genres: asArray(album?.genres),
     totalTracks: asNumber(pickFirstNonEmpty(album?.totalTracks, album?.total_tracks)),
     spotifyPopularity: asNumber(album?.spotifyPopularity),
-    artist: album?.artist?.name ?? album?.artists?.[0]?.name ?? primaryArtist?.name ?? null,
+    artist: primaryArtist?.name ?? null,
     artists,
-    artistId: album?.artist?.id ?? album?.artists?.[0]?.id ?? primaryArtist?.id ?? null,
-    artistName: album?.artist?.name ?? album?.artists?.[0]?.name ?? primaryArtist?.name ?? null,
+    artistId: primaryArtist?.id ?? null,
+    artistName: primaryArtist?.name ?? null,
     primaryArtist,
     primaryArtistId: primaryArtist?.id ?? null,
     primaryArtistName: primaryArtist?.name ?? null,
@@ -446,11 +471,13 @@ export function normalizeTrack(track: any) {
 
   const rawArtists = Array.isArray(track?.artists) ? track.artists : [];
   const artists = rawArtists.length > 0
-    ? rawArtists.map((artist: any) => normalizeArtist(artist))
+    ? rawArtists
+        .filter((artist: any) => !isHiddenArtist(artist))
+        .map((artist: any) => normalizeArtist(artist))
     : [];
 
   const normalizedAlbum = album ? normalizeAlbum(album) : null;
-  const fallbackArtistName = pickFirstNonEmpty(
+  const fallbackArtistName = pickFirstVisibleArtistName(
     track?.primaryArtistName,
     track?.artistName,
     typeof track?.artist === "string" ? track.artist : null,
@@ -470,7 +497,7 @@ export function normalizeTrack(track: any) {
     album?.primaryArtistId,
     album?.primaryArtist?.id
   );
-  const fallbackArtist = track?.primaryArtist && typeof track.primaryArtist === "object"
+  const fallbackArtist = track?.primaryArtist && typeof track.primaryArtist === "object" && !isHiddenArtist(track.primaryArtist)
     ? normalizeArtist(track.primaryArtist)
     : fallbackArtistName || fallbackArtistId
       ? normalizeArtist({ id: fallbackArtistId ?? null, name: fallbackArtistName ?? null })
@@ -543,6 +570,8 @@ export function normalizeRecentItem(item: any) {
 
 export function normalizeTopItem(item: any, type: "artists" | "tracks" | "albums") {
   if (type === "artists") {
+    if (isHiddenArtist(item?.artist)) return null;
+
     return {
       ...normalizeArtist(item?.artist),
       streams: item?.streams ?? 0,

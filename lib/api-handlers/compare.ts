@@ -360,7 +360,9 @@ async function fetchUserComparisonData(
     },
     tops: {
       tracks: topTrackItems.map((item) => normalizeStreamItemForKind(item, "tracks")),
-      artists: topArtists.ok ? getItems(topArtists.data).map((item: any) => normalizeStreamItemForKind(item, "artists")) : [],
+      artists: topArtists.ok
+        ? getItems(topArtists.data).map((item: any) => normalizeStreamItemForKind(item, "artists")).filter(Boolean)
+        : [],
       albums: topAlbumItems.map((item: any) => normalizeStreamItemForKind(item, "albums")),
       genres: topGenres.ok ? getItems(topGenres.data).map(normalizeGenreItem) : [],
     },

@@ -6,7 +6,7 @@ import {
   readOptionalQueryString,
   readQueryString,
 } from "../api-helpers.js";
-import { normalizeAlbum, normalizeArtist, normalizeTrack } from "../normalize.js";
+import { isHiddenArtist, normalizeAlbum, normalizeArtist, normalizeTrack } from "../normalize.js";
 import { statsfmFetch } from "../statsfm.js";
 import {
   enrichAlbumItemsWithOwners,
@@ -34,7 +34,9 @@ function normalizeSectionItem(item: any, section: ArtistCatalogSection) {
   }
 
   if (section === "related") {
-    return normalizeArtist(item?.artist ?? item);
+    const artist = item?.artist ?? item;
+    if (isHiddenArtist(artist)) return null;
+    return normalizeArtist(artist);
   }
 
   return normalizeTrack(item?.track ?? item);
@@ -75,6 +77,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     id,
     section,
     endpoint: result.endpoint,
-    items: items.map((item: any) => normalizeSectionItem(item, section)),
+    items: items.map((item: any) => normalizeSectionItem(item, section)).filter(Boolean),
   });
 }

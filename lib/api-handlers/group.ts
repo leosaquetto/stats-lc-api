@@ -277,7 +277,7 @@ async function getUserBundle(
 
     tops: {
       artists: Array.isArray(artistsData?.items)
-        ? artistsData.items.map((item: any) => normalizeTopItem(item, "artists"))
+        ? artistsData.items.map((item: any) => normalizeTopItem(item, "artists")).filter(Boolean)
         : [],
       tracks: topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")),
       albums: topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")),

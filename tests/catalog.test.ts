@@ -6,6 +6,7 @@ import artistCatalogHandler from "../lib/api-handlers/artist-catalog.ts";
 import entityHandler from "../lib/api-handlers/entity.ts";
 import entityListenersHandler from "../lib/api-handlers/entity-listeners.ts";
 import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
+import lyricsHandler from "../lib/api-handlers/lyrics.ts";
 import searchHandler from "../lib/api-handlers/search.ts";
 import userFriendsHandler from "../lib/api-handlers/user-friends.ts";
 import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
@@ -19,6 +20,7 @@ import {
 import { __resetStatsfmStateForTests } from "../lib/statsfm.ts";
 
 const originalFetch = globalThis.fetch;
+const originalGeniusToken = process.env.GENIUS_ACCESS_TOKEN;
 
 const referenceFixtures = {
   track: {
@@ -101,6 +103,11 @@ const referenceFixtures = {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalGeniusToken === undefined) {
+    delete process.env.GENIUS_ACCESS_TOKEN;
+  } else {
+    process.env.GENIUS_ACCESS_TOKEN = originalGeniusToken;
+  }
   __resetStatsfmStateForTests();
 });
 
@@ -386,6 +393,47 @@ test("search proxies q/type and normalizes typed results", async () => {
   assert.equal(capturedUrl?.searchParams.get("query"), "lana");
   assert.equal(capturedUrl?.searchParams.get("type"), "artist");
   assert.deepEqual(captured.body.items[0].item.genres, ["Pop"]);
+});
+
+test("lyrics matches a Genius song without exposing lyrics text", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+  let authorization = "";
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    authorization = String((init?.headers as any)?.Authorization || "");
+    return jsonResponse({
+      meta: { status: 200 },
+      response: {
+        hits: [
+          {
+            result: {
+              id: 123,
+              title: "Venice Bitch",
+              full_title: "Venice Bitch by Lana Del Rey",
+              url: "https://genius.com/Lana-del-rey-venice-bitch-lyrics",
+              path: "/Lana-del-rey-venice-bitch-lyrics",
+              lyrics_state: "complete",
+              primary_artist: { name: "Lana Del Rey" },
+              song_art_image_thumbnail_url: "https://img.test/thumb.jpg",
+            },
+          },
+        ],
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "Venice Bitch", artist: "Lana Del Rey" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.ok, true);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.url, "https://genius.com/Lana-del-rey-venice-bitch-lyrics");
+  assert.equal("lyrics" in captured.body.match, false);
+  assert.equal(authorization, "Bearer test-token");
 });
 
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {

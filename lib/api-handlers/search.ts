@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { buildQuery, getItems, readOptionalQueryString, readQueryString } from "../api-helpers.js";
 import {
+  isHiddenArtist,
   normalizeAlbum,
   normalizeArtist,
   normalizeTrack,
@@ -33,7 +34,9 @@ function normalizeSearchItem(item: any) {
   }
 
   if (type === "artist" || item?.artist) {
-    return { type: "artist", item: normalizeArtist(item?.artist ?? value) };
+    const artist = item?.artist ?? value;
+    if (isHiddenArtist(artist)) return null;
+    return { type: "artist", item: normalizeArtist(artist) };
   }
 
   if (type === "album" || item?.album) {
@@ -105,6 +108,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     q,
     type,
     endpoint: result.endpoint,
-    items: items.map(normalizeSearchItem),
+    items: items.map(normalizeSearchItem).filter(Boolean),
   });
 }

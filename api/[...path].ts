@@ -10,6 +10,7 @@ import entityHandler from "../lib/api-handlers/entity.js";
 import groupLiveHandler from "../lib/api-handlers/group-live.js";
 import groupHandler from "../lib/api-handlers/group.js";
 import healthHandler from "../lib/api-handlers/health.js";
+import lyricsHandler from "../lib/api-handlers/lyrics.js";
 import recentHandler from "../lib/api-handlers/recent.js";
 import replayHandler from "../lib/api-handlers/replay.js";
 import searchHandler from "../lib/api-handlers/search.js";
@@ -36,6 +37,7 @@ const ROUTES: Record<string, Handler> = {
   "group-live": groupLiveHandler,
   group: groupHandler,
   health: healthHandler,
+  lyrics: lyricsHandler,
   recent: recentHandler,
   replay: replayHandler,
   search: searchHandler,

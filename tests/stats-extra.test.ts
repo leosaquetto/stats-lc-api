@@ -380,6 +380,43 @@ test("normalizeTrack exposes album-owned primary artist and secondary artists", 
   assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.id), ["guest"]);
 });
 
+test("normalizeTrack hides Various Artists from artist fields", () => {
+  const track = normalizeTrack({
+    id: "track-1",
+    name: "Goals",
+    artists: [
+      { id: "lisa", name: "LiSA" },
+      { id: "rema", name: "Rema" },
+      { id: "anitta", name: "Anitta" },
+      { id: "various", name: "Various Artists" },
+    ],
+    albums: [
+      {
+        id: "album-1",
+        name: "GOALS (FIFA World Cup 2026) - Single",
+        artist: { id: "various", name: "Various Artists" },
+        artists: [{ id: "various", name: "Various Artists" }],
+      },
+    ],
+  });
+
+  assert.deepEqual(track.artists.map((artist: any) => artist.name), ["LiSA", "Rema", "Anitta"]);
+  assert.equal(track.primaryArtistName, "LiSA");
+  assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.name), ["Rema", "Anitta"]);
+  assert.equal(track.album.artistName, null);
+  assert.deepEqual(track.album.artists, []);
+});
+
+test("normalizeTopItem omits Various Artists top artist entries", () => {
+  const topArtist = normalizeTopItem({
+    position: 1,
+    streams: 10,
+    artist: { id: "various", name: "Various Artists" },
+  }, "artists");
+
+  assert.equal(topArtist, null);
+});
+
 test("multi-artist top tracks use album detail owner before first track artist", async () => {
   const urls: URL[] = [];
   globalThis.fetch = async (input) => {

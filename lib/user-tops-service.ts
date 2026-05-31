@@ -44,5 +44,7 @@ export async function normalizeTopItems(
       ? await enrichAlbumItemsWithOwners(items, options)
       : items;
 
-  return enrichedItems.map((item: any) => normalizeTopItem(item, type));
+  return enrichedItems
+    .map((item: any) => normalizeTopItem(item, type))
+    .filter(Boolean);
 }
