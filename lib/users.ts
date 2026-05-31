@@ -19,6 +19,14 @@ export const USERS = {
     id: "12182998998",
     platform: "spotify",
   },
+  fabiomian: {
+    id: "12147621938",
+    platform: "spotify",
+  },
+  guilhermou: {
+    id: "31gwcieaym3sg36sg3nl3q6nwfci",
+    platform: "spotify",
+  },
 } as const;
 
 export type UserKey = keyof typeof USERS;
