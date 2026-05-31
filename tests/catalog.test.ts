@@ -395,11 +395,36 @@ test("search proxies q/type and normalizes typed results", async () => {
   assert.deepEqual(captured.body.items[0].item.genres, ["Pop"]);
 });
 
-test("lyrics matches a Genius song without exposing lyrics text", async () => {
+test("lyrics can scrape modern Genius lyrics containers when requested", async () => {
   process.env.GENIUS_ACCESS_TOKEN = "test-token";
   let authorization = "";
+  const urls: string[] = [];
 
   globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    const url = String(_input);
+    urls.push(url);
+
+    if (url.includes("genius.com/Lana-del-rey-venice-bitch-lyrics")) {
+      return new Response(`
+        <main>
+          <div id="lyrics-root">
+            <div data-lyrics-container="true">
+              White lines, pretty baby<br>
+              Tattoos
+              <span data-exclude-from-selection="true">Embed</span>
+            </div>
+            <div data-lyrics-container="true">
+              Don't make me sad<br>
+              Don't make me cry
+            </div>
+          </div>
+        </main>
+      `, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }
+
     authorization = String((init?.headers as any)?.Authorization || "");
     return jsonResponse({
       meta: { status: 200 },
@@ -425,15 +450,16 @@ test("lyrics matches a Genius song without exposing lyrics text", async () => {
   const { res, captured } = createResponseCapture();
 
   await lyricsHandler({
-    query: { title: "Venice Bitch", artist: "Lana Del Rey" },
+    query: { title: "Venice Bitch", artist: "Lana Del Rey", includeLyrics: "1" },
   } as any, res);
 
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.ok, true);
   assert.equal(captured.body.hasLyrics, true);
   assert.equal(captured.body.match.url, "https://genius.com/Lana-del-rey-venice-bitch-lyrics");
-  assert.equal("lyrics" in captured.body.match, false);
+  assert.equal(captured.body.lyrics, "White lines, pretty baby\nTattoos\nDon't make me sad\nDon't make me cry");
   assert.equal(authorization, "Bearer test-token");
+  assert.equal(urls.length, 2);
 });
 
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {

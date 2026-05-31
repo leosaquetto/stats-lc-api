@@ -24,6 +24,7 @@ export type GeniusLyricsMatch = {
     confidence: "high" | "medium";
     score: number;
   };
+  lyrics?: string | null;
 };
 
 function readAccessToken() {
@@ -44,8 +45,8 @@ function canonicalText(value: unknown) {
     : "";
 }
 
-function cacheKey(title: string, artist: string | null) {
-  return `${canonicalText(title)}|${canonicalText(artist)}`;
+function cacheKey(title: string, artist: string | null, includeLyrics: boolean) {
+  return `${canonicalText(title)}|${canonicalText(artist)}|lyrics=${includeLyrics ? "1" : "0"}`;
 }
 
 function includesText(value: string, candidate: string) {
@@ -88,10 +89,101 @@ function normalizeMatch(hit: any, score: number) {
   };
 }
 
-export async function findGeniusLyricsMatch(title: string, artist: string | null): Promise<GeniusLyricsMatch> {
+function decodeHtml(value: string) {
+  return value
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([a-f0-9]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
+}
+
+function htmlToText(value: string) {
+  return decodeHtml(
+    value
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|h[1-6])>/gi, "\n")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, "")
+  )
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripExcludedSelectionNodes(value: string) {
+  let html = value;
+  const excludedElementPattern =
+    /<([a-z0-9-]+)\b[^>]*data-exclude-from-selection=["']true["'][^>]*>[\s\S]*?<\/\1>/gi;
+  let previous = "";
+
+  while (previous !== html) {
+    previous = html;
+    html = html.replace(excludedElementPattern, "");
+  }
+
+  return html.replace(/<[^>]+data-exclude-from-selection=["']true["'][^>]*\/?>/gi, "");
+}
+
+function extractLyricsFromHtml(html: string) {
+  const rootMatch = html.match(/<div\b[^>]*id=["']lyrics-root["'][^>]*>([\s\S]*?)(?:<div\b[^>]*id=["']annotation_sidebar["']|<\/main>|<\/body>)/i);
+  const searchArea = rootMatch?.[1] ?? html;
+  const modernBlocks = [...searchArea.matchAll(/<div\b[^>]*data-lyrics-container=["']true["'][^>]*>([\s\S]*?)<\/div>/gi)]
+    .map((match) => htmlToText(stripExcludedSelectionNodes(match[1])))
+    .filter(Boolean);
+
+  if (modernBlocks.length > 0) return modernBlocks.join("\n").trim();
+
+  const legacyMatch = html.match(/<div\b[^>]*class=["'][^"']*\blyrics\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  return legacyMatch ? htmlToText(stripExcludedSelectionNodes(legacyMatch[1])) : null;
+}
+
+async function fetchGeniusLyrics(url: string | null) {
+  if (!url) return { lyrics: null, reason: "missing_url" };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (compatible; stats.lc lyrics matcher; +https://statslc.leosaquetto.com)",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return { lyrics: null, reason: `lyrics_upstream_${response.status}` };
+    }
+
+    const html = await response.text();
+    const lyrics = extractLyricsFromHtml(html);
+    return lyrics ? { lyrics, reason: null } : { lyrics: null, reason: "lyrics_not_found" };
+  } catch (error: any) {
+    return { lyrics: null, reason: error?.name === "AbortError" ? "lyrics_timeout" : "lyrics_request_failed" };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function findGeniusLyricsMatch(
+  title: string,
+  artist: string | null,
+  options: { includeLyrics?: boolean } = {}
+): Promise<GeniusLyricsMatch> {
+  const includeLyrics = options.includeLyrics === true;
   const normalizedTitle = title.trim();
   const normalizedArtist = artist?.trim() || null;
-  const key = cacheKey(normalizedTitle, normalizedArtist);
+  const key = cacheKey(normalizedTitle, normalizedArtist, includeLyrics);
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
@@ -135,7 +227,7 @@ export async function findGeniusLyricsMatch(title: string, artist: string | null
       .sort((a: any, b: any) => b.score - a.score);
     const winner = ranked[0];
 
-    const result = winner && winner.score >= 0.72
+    const result: GeniusLyricsMatch = winner && winner.score >= 0.72
       ? {
           ...baseResponse,
           hasLyrics: true,
@@ -145,6 +237,12 @@ export async function findGeniusLyricsMatch(title: string, artist: string | null
           ...baseResponse,
           reason: hits.length > 0 ? "no_confident_match" : "not_found",
         };
+
+    if (includeLyrics && result.match?.url) {
+      const lyricsResult = await fetchGeniusLyrics(result.match.url);
+      result.lyrics = lyricsResult.lyrics;
+      if (!lyricsResult.lyrics) result.reason = lyricsResult.reason;
+    }
 
     cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, data: result });
     return result;
