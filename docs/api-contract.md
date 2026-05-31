@@ -80,6 +80,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | `/api/user-friends` | `user=<user>`, optional `force=1` | Friends page data. | Normalized friend `items` plus best-effort `count`; count lookup failure is isolated under `errors.count`. |
 
 `/api/lyrics` returns `hasLyrics: false` with `reason: "not_configured"` when `GENIUS_ACCESS_TOKEN` is missing, so clients can hide lyrics UI without treating that as a hard API failure.
+After changing `GENIUS_ACCESS_TOKEN` in Vercel, redeploy the API so serverless functions receive the updated runtime environment.
 
 ### Entity and catalog endpoints
 
