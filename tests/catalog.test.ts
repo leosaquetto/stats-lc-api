@@ -477,6 +477,41 @@ test("lyrics can scrape modern Genius lyrics containers when requested", async (
   assert.equal(urls.length, 3);
 });
 
+test("lyrics match ignores remaster suffixes in track titles", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+
+  globalThis.fetch = async () => jsonResponse({
+    meta: { status: 200 },
+    response: {
+      hits: [
+        {
+          result: {
+            id: 2907,
+            title: "Dirty Diana",
+            full_title: "Dirty Diana by Michael Jackson",
+            url: "https://genius.com/Michael-jackson-dirty-diana-lyrics",
+            path: "/Michael-jackson-dirty-diana-lyrics",
+            lyrics_state: "complete",
+            primary_artist: { name: "Michael Jackson" },
+          },
+        },
+      ],
+    },
+  });
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "Dirty Diana - 2012 Remaster", artist: "Michael Jackson" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.id, 2907);
+  assert.equal(captured.body.match.title, "Dirty Diana");
+  assert.equal(captured.body.match.score, 1);
+});
+
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {
   const track = normalizeTrack(referenceFixtures.track);
   const artist = normalizeArtist(referenceFixtures.artist);

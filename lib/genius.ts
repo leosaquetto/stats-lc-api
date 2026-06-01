@@ -46,8 +46,23 @@ function canonicalText(value: unknown) {
     : "";
 }
 
+function stripLyricsTitleVersion(value: unknown) {
+  if (typeof value !== "string") return value;
+
+  return value
+    .replace(
+      /\s+[-–—]\s+(?:(?:\d{4}\s+)?remaster(?:ed)?(?:\s+version)?|remaster(?:ed)?(?:\s+\d{4})?)\s*$/i,
+      ""
+    )
+    .trim();
+}
+
+function canonicalTitleText(value: unknown) {
+  return canonicalText(stripLyricsTitleVersion(value));
+}
+
 function cacheKey(title: string, artist: string | null, includeLyrics: boolean, includeWriters: boolean) {
-  return `${canonicalText(title)}|${canonicalText(artist)}|lyrics=${includeLyrics ? "1" : "0"}|writers=${includeWriters ? "1" : "0"}`;
+  return `${canonicalTitleText(title)}|${canonicalText(artist)}|lyrics=${includeLyrics ? "1" : "0"}|writers=${includeWriters ? "1" : "0"}`;
 }
 
 function includesText(value: string, candidate: string) {
@@ -56,7 +71,7 @@ function includesText(value: string, candidate: string) {
 
 function scoreHit(hit: any, title: string, artist: string | null) {
   const result = hit?.result ?? hit;
-  const titleNeedle = canonicalText(title);
+  const titleNeedle = canonicalTitleText(title);
   const artistNeedle = canonicalText(artist);
   const resultTitle = canonicalText(result?.title);
   const resultFullTitle = canonicalText(result?.full_title);
