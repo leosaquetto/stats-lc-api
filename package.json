@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@vercel/node": "latest"
+    "@vercel/node": "latest",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "typescript": "latest",

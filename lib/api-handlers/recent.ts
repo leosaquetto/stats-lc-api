@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
 import { fetchUserRecentStreams, normalizeStreamItems } from "../user-streams-service.js";
+import { attachDominantColorToItems } from "../artwork-color.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -21,15 +22,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  const items = await normalizeStreamItems(result.data, {
+    force,
+    userId,
+    useTrackStreamEvidence: resolveAlbums,
+  });
+
   res.status(200).json({
     ok: true,
     user,
     userId,
     endpoint: result.endpoint,
-    items: await normalizeStreamItems(result.data, {
-      force,
-      userId,
-      useTrackStreamEvidence: resolveAlbums,
-    }),
+    items: await attachDominantColorToItems(items, Math.min(limit, 50)),
   });
 }

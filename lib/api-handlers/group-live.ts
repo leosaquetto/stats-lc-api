@@ -5,6 +5,7 @@ import { statsfmFetch } from "../statsfm.js";
 import { fetchUserRecentStreams } from "../user-streams-service.js";
 import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 import { mapWithConcurrency, sendJsonError, setCacheHeaders } from "../api-helpers.js";
+import { attachDominantColorToRecentItem } from "../artwork-color.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 
@@ -98,7 +99,7 @@ async function getLiveUserBundle(
   }
 
   const recentItemRaw = enrichedItems[0] ?? null;
-  const nowPlayingRaw = recentItemRaw ? normalizeRecentItem(recentItemRaw) : null;
+  const nowPlayingRaw = recentItemRaw ? await attachDominantColorToRecentItem(normalizeRecentItem(recentItemRaw)) : null;
   const platformDecision = extractUserPlatform(profileRaw, key);
 
   const warnings = [

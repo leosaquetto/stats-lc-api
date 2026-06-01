@@ -18,6 +18,7 @@ import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
 } from "../track-album-enrichment.js";
+import { attachDominantColorToItems, attachDominantColorToRecentItem } from "../artwork-color.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -184,10 +185,18 @@ async function getUserBundle(
   const platformDecision = extractUserPlatform(profileRaw, key);
   const nowPlayingRaw =
     recentItems[0]
-      ? normalizeRecentItem(recentItems[0])
+      ? await attachDominantColorToRecentItem(normalizeRecentItem(recentItems[0]))
       : null;
 
-  const recentNormalized = recentItems.map(normalizeRecentItem);
+  const recentNormalized = await attachDominantColorToItems(recentItems.map(normalizeRecentItem), 5);
+  const normalizedTopTracks = await attachDominantColorToItems(
+    topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")),
+    3
+  );
+  const normalizedTopAlbums = await attachDominantColorToItems(
+    topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")),
+    3
+  );
 
   const catalogSummary = recentNormalized.reduce(
     (acc: any, item: any) => {
@@ -279,8 +288,8 @@ async function getUserBundle(
       artists: Array.isArray(artistsData?.items)
         ? artistsData.items.map((item: any) => normalizeTopItem(item, "artists")).filter(Boolean)
         : [],
-      tracks: topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")),
-      albums: topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")),
+      tracks: normalizedTopTracks,
+      albums: normalizedTopAlbums,
     },
 
     warnings: [

@@ -9,6 +9,7 @@ import {
 import { resolveUserId } from "../users.js";
 import { fetchUserStatsRange, normalizeStatsSummary } from "../user-stats-service.js";
 import { fetchUserTop, normalizeTopItems } from "../user-tops-service.js";
+import { attachDominantColorToItems } from "../artwork-color.js";
 
 const VALID_PERIODS = ["today", "week", "month", "year", "all", "lifetime"] as const;
 type ReplayPeriod = typeof VALID_PERIODS[number];
@@ -82,7 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const topAlbumsRaw = topAlbums.ok ? getItems(topAlbums.data) : [];
   const normalizedTopArtists = topArtists.ok ? await normalizeTopItems(topArtists.data, "artists") : [];
-  const normalizedTopTracks = topTracks.ok
+  const normalizedTopTracksRaw = topTracks.ok
     ? await normalizeTopItems(topTracks.data, "tracks", {
         force,
         cacheProfile: "replay",
@@ -91,9 +92,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         after,
       })
     : [];
-  const normalizedTopAlbums = topAlbums.ok
+  const normalizedTopAlbumsRaw = topAlbums.ok
     ? await normalizeTopItems(topAlbums.data, "albums", { force, cacheProfile: "replay" })
     : [];
+  const [normalizedTopTracks, normalizedTopAlbums] = await Promise.all([
+    attachDominantColorToItems(normalizedTopTracksRaw, TOP_LIMITS.tracks),
+    attachDominantColorToItems(normalizedTopAlbumsRaw, TOP_LIMITS.albums),
+  ]);
   const summary = normalizeStatsSummary(stats.data);
 
   setCacheHeaders(res, 300, force);
