@@ -296,11 +296,15 @@ function findAlbumArtistMatch(artists: any[], candidate: any) {
   const candidateParts = albumArtistNameParts(candidate);
   if (candidateParts.length <= 1) return null;
 
-  const candidatePartKeys = new Set(candidateParts.map(normalizedText).filter(Boolean));
-  return artists.find((artist) => {
-    const key = normalizedText(artist?.name);
-    return Boolean(key && candidatePartKeys.has(key));
-  }) ?? null;
+  for (const part of candidateParts) {
+    const partKey = normalizedText(part);
+    if (!partKey) continue;
+
+    const match = artists.find((artist) => normalizedText(artist?.name) === partKey);
+    if (match) return match;
+  }
+
+  return null;
 }
 
 function pickAlbumOwner(album: any) {

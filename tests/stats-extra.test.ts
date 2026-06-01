@@ -408,6 +408,29 @@ test("normalizeTrack uses shared artist when album artist is a multi-artist cred
   assert.equal(track.primaryArtistName, "HUNTR/X");
 });
 
+test("normalizeTrack follows album credit order for multi-artist singles", () => {
+  const track = normalizeTrack({
+    id: "hand-that-feeds",
+    name: "Hand That Feeds - From the Film Ballerina",
+    artists: [
+      { id: "amy-lee", name: "Amy Lee" },
+      { id: "halsey", name: "Halsey" },
+      { id: "evanescence", name: "Evanescence" },
+    ],
+    albums: [
+      {
+        id: "hand-that-feeds-single",
+        name: "Hand That Feeds (From the Film Ballerina) - Single",
+        artistName: "Halsey & Amy Lee",
+      },
+    ],
+  });
+
+  assert.equal(track.primaryArtistId, "halsey");
+  assert.equal(track.primaryArtistName, "Halsey");
+  assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.name), ["Amy Lee", "Evanescence"]);
+});
+
 test("normalizeTrack hides Various Artists from artist fields", () => {
   const track = normalizeTrack({
     id: "track-1",
