@@ -408,6 +408,33 @@ test("normalizeTrack uses shared artist when album artist is a multi-artist cred
   assert.equal(track.primaryArtistName, "HUNTR/X");
 });
 
+test("normalizeTrack matches compact album artist aliases like HUNTRX to HUNTR/X", () => {
+  const track = normalizeTrack({
+    id: "golden",
+    name: "Golden",
+    artists: [
+      { id: "audrey-nuna", name: "AUDREY NUNA" },
+      { id: "rei-ami", name: "REI AMI" },
+      { id: "huntrx-track", name: "HUNTR/X" },
+      { id: "ejae", name: "EJAE" },
+    ],
+    albums: [
+      {
+        id: "kpop-demon-hunters",
+        name: "KPop Demon Hunters (Soundtrack from the Netflix Film)",
+        artists: [
+          { id: "saja-boys", name: "Saja Boys" },
+          { id: "huntrx-album", name: "HUNTRX" },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(track.primaryArtistId, "huntrx-track");
+  assert.equal(track.primaryArtistName, "HUNTR/X");
+  assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.name), ["AUDREY NUNA", "REI AMI", "EJAE"]);
+});
+
 test("normalizeTrack follows album credit order for multi-artist singles", () => {
   const track = normalizeTrack({
     id: "hand-that-feeds",

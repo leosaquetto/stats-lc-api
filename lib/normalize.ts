@@ -260,6 +260,10 @@ function normalizedText(value: unknown) {
   return canonicalText(value);
 }
 
+function compactArtistText(value: unknown) {
+  return normalizedText(value).replace(/[^a-z0-9]+/g, "");
+}
+
 function sameArtist(a: any, b: any) {
   if (!a || !b) return false;
 
@@ -269,7 +273,11 @@ function sameArtist(a: any, b: any) {
 
   const aName = normalizedText(a?.name);
   const bName = normalizedText(b?.name);
-  return Boolean(aName && bName && aName === bName);
+  if (aName && bName && aName === bName) return true;
+
+  const compactA = compactArtistText(a?.name);
+  const compactB = compactArtistText(b?.name);
+  return Boolean(compactA && compactB && compactA === compactB);
 }
 
 function artistName(value: any) {
@@ -300,7 +308,7 @@ function findAlbumArtistMatch(artists: any[], candidate: any) {
     const partKey = normalizedText(part);
     if (!partKey) continue;
 
-    const match = artists.find((artist) => normalizedText(artist?.name) === partKey);
+    const match = artists.find((artist) => sameArtist(artist, { id: null, name: part }));
     if (match) return match;
   }
 
