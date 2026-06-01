@@ -11,6 +11,7 @@ import groupLiveHandler from "../lib/api-handlers/group-live.js";
 import groupHandler from "../lib/api-handlers/group.js";
 import healthHandler from "../lib/api-handlers/health.js";
 import lyricsHandler from "../lib/api-handlers/lyrics.js";
+import orbitsHandler from "../lib/api-handlers/orbits.js";
 import recentHandler from "../lib/api-handlers/recent.js";
 import replayHandler from "../lib/api-handlers/replay.js";
 import searchHandler from "../lib/api-handlers/search.js";
@@ -38,6 +39,7 @@ const ROUTES: Record<string, Handler> = {
   group: groupHandler,
   health: healthHandler,
   lyrics: lyricsHandler,
+  orbits: orbitsHandler,
   recent: recentHandler,
   replay: replayHandler,
   search: searchHandler,
@@ -74,7 +76,17 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const routePath = getRoutePath(req);
-  const route = ROUTES[routePath];
+  const [routeName, routeId, routeAction] = routePath.split("/");
+  if (routeName === "orbits" && routeId) {
+    if (routeId === "summary") {
+      req.query.action = "summary";
+    } else {
+      req.query.id = routeId;
+      req.query.pathAction = routeAction || "";
+    }
+  }
+
+  const route = ROUTES[routePath] || ROUTES[routeName];
 
   if (!route) {
     return sendJsonError(res, 404, "not_found", { path: routePath });
