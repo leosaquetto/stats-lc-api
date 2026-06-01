@@ -9,6 +9,7 @@ import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
 import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
+import { USERS } from "../lib/users.ts";
 import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
@@ -19,6 +20,7 @@ import {
 } from "../lib/statsfm.ts";
 
 const originalFetch = globalThis.fetch;
+const configuredUserCount = Object.keys(USERS).length;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -169,7 +171,7 @@ test("group-live returns lightweight live members with normalized nowPlaying", a
 
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.ok, true);
-  assert.equal(captured.body.members.length, 5);
+  assert.equal(captured.body.members.length, configuredUserCount);
   assert.equal(captured.body.members[0].profile.displayName, "Live User");
   assert.equal(captured.body.members[0].nowPlaying.track.name, "Live Song");
   assert.equal(captured.body.members[0].nowPlaying.platformCandidate.primary, "spotify");
@@ -351,7 +353,7 @@ test("entity-group-stats returns per-member stats and tolerates partial failures
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.ok, true);
   assert.equal(captured.body.type, "track");
-  assert.equal(captured.body.members.length, 5);
+  assert.equal(captured.body.members.length, configuredUserCount);
   assert.equal(captured.body.members[0].count, 1);
   assert.equal(captured.body.members[1].count, 0);
   assert.equal(captured.body.members[2].count, 3);
@@ -378,6 +380,32 @@ test("normalizeTrack exposes album-owned primary artist and secondary artists", 
   assert.equal(track.primaryArtistId, "main");
   assert.equal(track.primaryArtistName, "Main Artist");
   assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.id), ["guest"]);
+});
+
+test("normalizeTrack uses shared artist when album artist is a multi-artist credit", () => {
+  const track = normalizeTrack({
+    id: "golden",
+    name: "Golden",
+    artists: [
+      { id: "audrey-nuna", name: "AUDREY NUNA" },
+      { id: "rei-ami", name: "REI AMI" },
+      { id: "huntrx", name: "HUNTR/X" },
+      { id: "ejae", name: "EJAE" },
+    ],
+    albums: [
+      {
+        id: "kpop-demon-hunters",
+        name: "KPop Demon Hunters",
+        artists: [
+          { id: "cast", name: "KPop Demon Hunters Cast" },
+          { id: "huntrx-saja", name: "HUNTR/X & Saja Boys" },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(track.primaryArtistId, "huntrx");
+  assert.equal(track.primaryArtistName, "HUNTR/X");
 });
 
 test("normalizeTrack hides Various Artists from artist fields", () => {

@@ -272,6 +272,37 @@ function sameArtist(a: any, b: any) {
   return Boolean(aName && bName && aName === bName);
 }
 
+function artistName(value: any) {
+  return typeof value === "string" ? value : value?.name;
+}
+
+function albumArtistNameParts(value: any) {
+  const name = artistName(value);
+  if (typeof name !== "string" || !name.trim()) return [];
+
+  return name
+    .split(/\s*(?:,|&|\band\b|\be\b|\+)\s*/i)
+    .map((part) => part.trim())
+    .filter((part) => part && !isHiddenArtist(part));
+}
+
+function findAlbumArtistMatch(artists: any[], candidate: any) {
+  const normalizedCandidate = typeof candidate === "string"
+    ? { id: null, name: candidate }
+    : normalizeArtist(candidate);
+  const exactMatch = artists.find((artist) => sameArtist(artist, normalizedCandidate));
+  if (exactMatch) return exactMatch;
+
+  const candidateParts = albumArtistNameParts(candidate);
+  if (candidateParts.length <= 1) return null;
+
+  const candidatePartKeys = new Set(candidateParts.map(normalizedText).filter(Boolean));
+  return artists.find((artist) => {
+    const key = normalizedText(artist?.name);
+    return Boolean(key && candidatePartKeys.has(key));
+  }) ?? null;
+}
+
 function pickAlbumOwner(album: any) {
   if (!album || typeof album !== "object") return null;
 
@@ -304,16 +335,20 @@ function pickAlbumOwner(album: any) {
 function pickPrimaryArtist(artists: any[], album: any, rawArtists: any[] = []) {
   if (artists.length === 0) return null;
 
-  const albumCandidates = [
-    album?.artist,
+  const directAlbumArtist = album?.artist && !isHiddenArtist(album.artist)
+    ? findAlbumArtistMatch(artists, album.artist)
+    : null;
+  if (directAlbumArtist) return directAlbumArtist;
+
+  const albumArtistCandidates = [
     ...(Array.isArray(album?.artists) ? album.artists : []),
+    album?.primaryArtist,
+    album?.primaryArtistName,
+    album?.artistName,
   ].filter((artist) => artist && !isHiddenArtist(artist));
 
-  for (const candidate of albumCandidates) {
-    const normalizedCandidate = typeof candidate === "string"
-      ? { id: null, name: candidate }
-      : normalizeArtist(candidate);
-    const match = artists.find((artist) => sameArtist(artist, normalizedCandidate));
+  for (const candidate of albumArtistCandidates) {
+    const match = findAlbumArtistMatch(artists, candidate);
     if (match) return match;
   }
 
