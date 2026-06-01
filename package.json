@@ -3,12 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test lib/*.test.ts tests/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "vercel-build": "npm run typecheck"
+  },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "@vercel/node": "latest",
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.4",
     "typescript": "latest",
     "vercel": "latest"
   }

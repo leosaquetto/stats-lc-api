@@ -36,6 +36,34 @@ function getDisplayName(profileData: any, fallback: string) {
   );
 }
 
+function getNowPlayingTimestamp(nowPlaying: any) {
+  return nowPlaying?.timestamp ?? nowPlaying?.playedAt ?? nowPlaying?.endTime ?? null;
+}
+
+function isRecentNowPlaying(nowPlaying: any) {
+  if (typeof nowPlaying?.isNow === "boolean") return nowPlaying.isNow;
+
+  const timestamp = getNowPlayingTimestamp(nowPlaying);
+  if (!timestamp) return false;
+
+  const time = new Date(timestamp).getTime();
+  if (!Number.isFinite(time)) return false;
+
+  return Date.now() - time < 5 * 60 * 1000;
+}
+
+function getNowPlayingKey(nowPlaying: any) {
+  return (
+    nowPlaying?.playbackKey ??
+    nowPlaying?.streamId ??
+    nowPlaying?.stream?.id ??
+    nowPlaying?.id ??
+    nowPlaying?.playedAt ??
+    nowPlaying?.endTime ??
+    null
+  );
+}
+
 async function fetchSafe<T>(promise: Promise<T>) {
   try {
     return await promise;
@@ -117,6 +145,9 @@ async function getLiveUserBundle(
     nowPlaying: nowPlayingRaw
       ? {
           ...nowPlayingRaw,
+          isNow: isRecentNowPlaying(nowPlayingRaw),
+          timestamp: getNowPlayingTimestamp(nowPlayingRaw),
+          playbackKey: getNowPlayingKey(nowPlayingRaw),
           playedMs: nowPlayingRaw.playedMs ?? null,
           durationMs: nowPlayingRaw?.track?.durationMs ?? null,
           track: nowPlayingRaw.track

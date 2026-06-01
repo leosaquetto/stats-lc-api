@@ -174,6 +174,9 @@ test("group-live returns lightweight live members with normalized nowPlaying", a
   assert.equal(captured.body.members.length, configuredUserCount);
   assert.equal(captured.body.members[0].profile.displayName, "Live User");
   assert.equal(captured.body.members[0].nowPlaying.track.name, "Live Song");
+  assert.equal(typeof captured.body.members[0].nowPlaying.isNow, "boolean");
+  assert.equal(captured.body.members[0].nowPlaying.timestamp, "2026-05-22T22:00:00.000Z");
+  assert.equal(captured.body.members[0].nowPlaying.playbackKey, "stream-1");
   assert.equal(captured.body.members[0].nowPlaying.platformCandidate.primary, "spotify");
 });
 
