@@ -57,6 +57,13 @@ function stripLyricsTitleVersion(value: unknown) {
     .trim();
 }
 
+function stripLyricsSearchSuffix(value: string) {
+  return String(stripLyricsTitleVersion(value))
+    .replace(/\s*[\(\[]\s*(?:feat|ft|with)\.?\b[\s\S]*[\)\]]\s*$/i, "")
+    .replace(/\s+(?:feat|ft|with)\.?\b.*$/i, "")
+    .trim();
+}
+
 function canonicalTitleText(value: unknown) {
   return canonicalText(stripLyricsTitleVersion(value));
 }
@@ -276,25 +283,35 @@ export async function findGeniusLyricsMatch(
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const query = buildQuery({ q: [normalizedTitle, normalizedArtist].filter(Boolean).join(" ") });
-    const response = await fetch(`${GENIUS_API_BASE}/search${query}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
-      signal: controller.signal,
-    });
+    const search = async (searchTitle: string) => {
+      const query = buildQuery({ q: [searchTitle, normalizedArtist].filter(Boolean).join(" ") });
+      const response = await fetch(`${GENIUS_API_BASE}/search${query}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      return { ...baseResponse, reason: `upstream_${response.status}` };
-    }
+      if (!response.ok) {
+        throw new Error(`upstream_${response.status}`);
+      }
 
-    const data: any = await response.json();
-    const hits = Array.isArray(data?.response?.hits) ? data.response.hits : [];
-    const ranked = hits
+      const data: any = await response.json();
+      return Array.isArray(data?.response?.hits) ? data.response.hits : [];
+    };
+    const rankHits = (hits: any[]) => hits
       .map((hit: any) => ({ hit, score: scoreHit(hit, normalizedTitle, normalizedArtist) }))
       .sort((a: any, b: any) => b.score - a.score);
-    const winner = ranked[0];
+
+    let hits = await search(normalizedTitle);
+    let winner = rankHits(hits)[0];
+    const simplifiedTitle = stripLyricsSearchSuffix(normalizedTitle);
+
+    if ((!winner || winner.score < 0.72) && simplifiedTitle && simplifiedTitle !== normalizedTitle) {
+      hits = [...hits, ...await search(simplifiedTitle)];
+      winner = rankHits(hits)[0];
+    }
 
     const result: GeniusLyricsMatch = winner && winner.score >= 0.72
       ? {
@@ -320,7 +337,14 @@ export async function findGeniusLyricsMatch(
     cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, data: result });
     return result;
   } catch (error: any) {
-    return { ...baseResponse, reason: error?.name === "AbortError" ? "timeout" : "request_failed" };
+    return {
+      ...baseResponse,
+      reason: error?.name === "AbortError"
+        ? "timeout"
+        : typeof error?.message === "string" && error.message.startsWith("upstream_")
+          ? error.message
+          : "request_failed",
+    };
   } finally {
     clearTimeout(timeout);
   }

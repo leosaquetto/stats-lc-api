@@ -512,6 +512,53 @@ test("lyrics match ignores remaster suffixes in track titles", async () => {
   assert.equal(captured.body.match.score, 1);
 });
 
+test("lyrics match retries without parenthetical featured artists", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+  const queries: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q") || "");
+
+    if (queries.length === 1) {
+      return jsonResponse({ meta: { status: 200 }, response: { hits: [] } });
+    }
+
+    return jsonResponse({
+      meta: { status: 200 },
+      response: {
+        hits: [
+          {
+            result: {
+              id: 10780463,
+              title: "GET UP BITCH! shake ya ass",
+              full_title: "GET UP BITCH! shake ya ass by Victoria & Anitta",
+              url: "https://genius.com/Victoria-and-anitta-get-up-bitch-shake-ya-ass-lyrics",
+              path: "/Victoria-and-anitta-get-up-bitch-shake-ya-ass-lyrics",
+              lyrics_state: "complete",
+              primary_artist: { name: "Victoria" },
+            },
+          },
+        ],
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "GET UP BITCH! shake ya ass (with Victoria & Anitta)", artist: "Victoria" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.id, 10780463);
+  assert.deepEqual(queries, [
+    "GET UP BITCH! shake ya ass (with Victoria & Anitta) Victoria",
+    "GET UP BITCH! shake ya ass Victoria",
+  ]);
+});
+
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {
   const track = normalizeTrack(referenceFixtures.track);
   const artist = normalizeArtist(referenceFixtures.artist);
