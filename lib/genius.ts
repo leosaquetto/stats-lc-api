@@ -25,6 +25,7 @@ export type GeniusLyricsMatch = {
     score: number;
   };
   lyrics?: string | null;
+  writers?: string[];
 };
 
 function readAccessToken() {
@@ -45,8 +46,8 @@ function canonicalText(value: unknown) {
     : "";
 }
 
-function cacheKey(title: string, artist: string | null, includeLyrics: boolean) {
-  return `${canonicalText(title)}|${canonicalText(artist)}|lyrics=${includeLyrics ? "1" : "0"}`;
+function cacheKey(title: string, artist: string | null, includeLyrics: boolean, includeWriters: boolean) {
+  return `${canonicalText(title)}|${canonicalText(artist)}|lyrics=${includeLyrics ? "1" : "0"}|writers=${includeWriters ? "1" : "0"}`;
 }
 
 function includesText(value: string, candidate: string) {
@@ -87,6 +88,32 @@ function normalizeMatch(hit: any, score: number) {
     confidence: score >= 0.88 ? "high" as const : "medium" as const,
     score: Number(score.toFixed(3)),
   };
+}
+
+function uniqueNames(names: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const name of names) {
+    const trimmed = name.trim();
+    if (!trimmed) continue;
+
+    const key = canonicalText(trimmed);
+    if (!key || seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(trimmed);
+  }
+
+  return result;
+}
+
+function extractArtistNames(value: any) {
+  return uniqueNames(
+    (Array.isArray(value) ? value : [])
+      .map((artist: any) => typeof artist === "string" ? artist : artist?.name)
+      .filter((name: any): name is string => typeof name === "string" && name.trim() !== "")
+  );
 }
 
 function decodeHtml(value: string) {
@@ -175,15 +202,42 @@ async function fetchGeniusLyrics(url: string | null) {
   }
 }
 
+async function fetchGeniusWriters(songId: number | string | null, token: string) {
+  if (songId == null || songId === "") return [];
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${GENIUS_API_BASE}/songs/${encodeURIComponent(String(songId))}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) return [];
+
+    const data: any = await response.json();
+    return extractArtistNames(data?.response?.song?.writer_artists);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function findGeniusLyricsMatch(
   title: string,
   artist: string | null,
-  options: { includeLyrics?: boolean } = {}
+  options: { includeLyrics?: boolean; includeWriters?: boolean } = {}
 ): Promise<GeniusLyricsMatch> {
   const includeLyrics = options.includeLyrics === true;
+  const includeWriters = options.includeWriters === true || includeLyrics;
   const normalizedTitle = title.trim();
   const normalizedArtist = artist?.trim() || null;
-  const key = cacheKey(normalizedTitle, normalizedArtist, includeLyrics);
+  const key = cacheKey(normalizedTitle, normalizedArtist, includeLyrics, includeWriters);
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
@@ -238,10 +292,14 @@ export async function findGeniusLyricsMatch(
           reason: hits.length > 0 ? "no_confident_match" : "not_found",
         };
 
-    if (includeLyrics && result.match?.url) {
-      const lyricsResult = await fetchGeniusLyrics(result.match.url);
-      result.lyrics = lyricsResult.lyrics;
-      if (!lyricsResult.lyrics) result.reason = lyricsResult.reason;
+    if ((includeLyrics || includeWriters) && result.match) {
+      const [lyricsResult, writers] = await Promise.all([
+        includeLyrics ? fetchGeniusLyrics(result.match.url) : Promise.resolve({ lyrics: null, reason: null }),
+        fetchGeniusWriters(result.match.id, token),
+      ]);
+      if (includeLyrics) result.lyrics = lyricsResult.lyrics;
+      if (writers.length > 0) result.writers = writers;
+      if (includeLyrics && !lyricsResult.lyrics && lyricsResult.reason) result.reason = lyricsResult.reason;
     }
 
     cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, data: result });

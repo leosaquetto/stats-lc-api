@@ -425,6 +425,20 @@ test("lyrics can scrape modern Genius lyrics containers when requested", async (
       });
     }
 
+    if (url.includes("api.genius.com/songs/123")) {
+      return jsonResponse({
+        meta: { status: 200 },
+        response: {
+          song: {
+            writer_artists: [
+              { id: 12886, name: "Lana Del Rey" },
+              { id: "rick", name: "Rick Nowels" },
+            ],
+          },
+        },
+      });
+    }
+
     authorization = String((init?.headers as any)?.Authorization || "");
     return jsonResponse({
       meta: { status: 200 },
@@ -458,8 +472,9 @@ test("lyrics can scrape modern Genius lyrics containers when requested", async (
   assert.equal(captured.body.hasLyrics, true);
   assert.equal(captured.body.match.url, "https://genius.com/Lana-del-rey-venice-bitch-lyrics");
   assert.equal(captured.body.lyrics, "White lines, pretty baby\nTattoos\nDon't make me sad\nDon't make me cry");
+  assert.deepEqual(captured.body.writers, ["Lana Del Rey", "Rick Nowels"]);
   assert.equal(authorization, "Bearer test-token");
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 3);
 });
 
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {
