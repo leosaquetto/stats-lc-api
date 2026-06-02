@@ -107,12 +107,16 @@ async function getLiveUserBundle(
   let enrichmentWarning: string | null = null;
 
   if (recentItems.length > 0) {
+    const needsTrackStreamEvidence = recentItems.some((item: any) => item?.albumId == null);
+
     try {
       enrichedItems = await enrichTrackItemsWithAlbumOwners(recentItems, {
         force: upstreamForce,
         userId: user.id,
-        useTrackStreamEvidence: true,
-        trackStreamEvidenceStrategy: "latest",
+        // Keep /api/group-live lightweight: only hit the per-track streams surface
+        // when the stream row does not already provide an albumId.
+        useTrackStreamEvidence: needsTrackStreamEvidence,
+        trackStreamEvidenceStrategy: needsTrackStreamEvidence ? "latest" : undefined,
         cacheProfile: "live",
         requestTimeoutMs: 2000, // 2s timeout for enrichment
       });

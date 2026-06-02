@@ -194,6 +194,28 @@ function extractLyricsFromHtml(html: string) {
   return legacyMatch ? htmlToText(stripExcludedSelectionNodes(legacyMatch[1])) : null;
 }
 
+function stripLyricsSectionTags(value: string) {
+  const sectionPattern =
+    /^(?:intro|outro|verse|chorus|hook|bridge|pre[- ]?chorus|post[- ]?chorus|refrain|interlude|instrumental|solo|spoken|skit|part|section|refr[aã]o|verso|ponte|coro)(?:\s+\d+)?(?:\s*\:.*)?$/i;
+
+  const cleaned = value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) return true;
+      const match = line.match(/^\[([^\]]+)\]$/);
+      if (!match) return true;
+
+      const label = match[1].trim();
+      return !sectionPattern.test(label);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return cleaned;
+}
+
 async function fetchGeniusLyrics(url: string | null) {
   if (!url) return { lyrics: null, reason: "missing_url" };
 
@@ -216,7 +238,9 @@ async function fetchGeniusLyrics(url: string | null) {
 
     const html = await response.text();
     const lyrics = extractLyricsFromHtml(html);
-    return lyrics ? { lyrics, reason: null } : { lyrics: null, reason: "lyrics_not_found" };
+    return lyrics
+      ? { lyrics: stripLyricsSectionTags(lyrics), reason: null }
+      : { lyrics: null, reason: "lyrics_not_found" };
   } catch (error: any) {
     return { lyrics: null, reason: error?.name === "AbortError" ? "lyrics_timeout" : "lyrics_request_failed" };
   } finally {
