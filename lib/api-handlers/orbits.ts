@@ -10,6 +10,21 @@ const getUserPlatform = (userId: string) => {
   return entry?.[1]?.platform || "unknown";
 };
 
+const getKnownUserId = (userId: unknown) => {
+  if (typeof userId !== "string" || !userId.trim()) return null;
+  const normalized = userId.trim();
+  const entry = Object.entries(USERS).find(([key, user]) => key === normalized || user.id === normalized);
+  return entry?.[1]?.id || null;
+};
+
+const hasTrackIdentity = (track: any) => Boolean(
+  track?.id
+  || track?.spotifyId
+  || track?.appleMusicId
+  || track?.externalIds?.spotify?.[0]
+  || track?.externalIds?.appleMusic?.[0]
+);
+
 const getListenUrl = (track: any, platform: string) => {
   const spotifyId = track?.spotifyId || track?.externalIds?.spotify?.[0];
   const appleMusicId = track?.appleMusicId || track?.externalIds?.appleMusic?.[0];
@@ -80,10 +95,12 @@ const sendOrbitList = async (req: VercelRequest, res: VercelResponse) => {
   const user = readQueryString(req.query.user);
   const box = readQueryString(req.query.box || "received") as OrbitBox;
   if (!user) return res.status(400).json({ ok: false, error: "missing_user" });
+  if (!getKnownUserId(user)) return res.status(400).json({ ok: false, error: "invalid_user" });
+  if (!["received", "sent", "all"].includes(box)) {
+    return res.status(400).json({ ok: false, error: "invalid_box" });
+  }
 
-  const items = await orbitStore.list(user, box);
-  await Promise.all(items.map(checkOrbitListens));
-  await Promise.all(items.map((orbit) => orbitStore.save(orbit)));
+  const items = await orbitStore.list(resolveUserId(user), box);
   setCacheHeaders(res, 0, true);
   return res.status(200).json({ ok: true, durable: usingDurableOrbitStore(), items });
 };
@@ -94,12 +111,25 @@ const createOrbit = async (req: VercelRequest, res: VercelResponse) => {
     return res.status(400).json({ ok: false, error: "missing_orbit_fields" });
   }
 
+  const normalizedFromUserId = getKnownUserId(fromUserId);
+  const normalizedToUserId = getKnownUserId(toUserId);
+  if (!normalizedFromUserId || !normalizedToUserId) {
+    return res.status(400).json({ ok: false, error: "invalid_orbit_user" });
+  }
+  if (normalizedFromUserId === normalizedToUserId) {
+    return res.status(400).json({ ok: false, error: "orbit_self_send_not_allowed" });
+  }
+
   const normalizedTrack = normalizeTrack(track);
-  const targetPlatform = getUserPlatform(toUserId);
+  if (!hasTrackIdentity(normalizedTrack)) {
+    return res.status(400).json({ ok: false, error: "invalid_orbit_track" });
+  }
+
+  const targetPlatform = getUserPlatform(normalizedToUserId);
   const orbit: Orbit = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-    fromUserId,
-    toUserId,
+    fromUserId: normalizedFromUserId,
+    toUserId: normalizedToUserId,
     track: normalizedTrack,
     message: typeof message === "string" ? message.slice(0, 120) : undefined,
     status: "sent",
@@ -118,6 +148,9 @@ const updateOrbit = async (req: VercelRequest, res: VercelResponse, action: stri
   const id = readQueryString(req.query.id);
   const orbit = await orbitStore.get(id);
   if (!orbit) return res.status(404).json({ ok: false, error: "orbit_not_found" });
+  if (!["seen", "opened", "dismiss", "delete-sent", "delete-received", "check-listens"].includes(action)) {
+    return res.status(400).json({ ok: false, error: "invalid_orbit_action" });
+  }
 
   const now = new Date().toISOString();
   if (action === "seen") {
@@ -147,8 +180,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET" && action === "summary") {
     const user = readQueryString(req.query.user);
     if (!user) return res.status(400).json({ ok: false, error: "missing_user" });
+    if (!getKnownUserId(user)) return res.status(400).json({ ok: false, error: "invalid_user" });
     setCacheHeaders(res, 0, true);
-    return res.status(200).json({ ok: true, durable: usingDurableOrbitStore(), ...await orbitStore.summary(user) });
+    return res.status(200).json({ ok: true, durable: usingDurableOrbitStore(), ...await orbitStore.summary(resolveUserId(user)) });
   }
 
   if (req.method === "GET") return sendOrbitList(req, res);

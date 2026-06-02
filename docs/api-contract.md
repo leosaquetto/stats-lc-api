@@ -89,7 +89,7 @@ After changing `GENIUS_ACCESS_TOKEN` in Vercel, redeploy the API so serverless f
 | Endpoint | Query | Purpose | Response highlights |
 | --- | --- | --- | --- |
 | `/api/entity` | `type=track|artist|album`, `id=<entity id>`, optional `force=1` | Entity detail page data. | Normalized `entity` object for stats.fm track, artist, or album detail pages. |
-| `/api/entity-stats` | `user=<user>`, `type=track|artist|album`, `id=<entity id>`, optional `force=1` | One user's stats for one entity. | `count`, `durationMs`, and `minutes`. |
+| `/api/entity-stats` | `user=<user>`, `type=track|artist|album`, `id=<entity id>`, optional `after`, `before`, `force=1` | One user's aggregated stats for one entity, optionally scoped to a timestamp range. | `count`, `durationMs`, and `minutes`. |
 | `/api/entity-group-stats` | `type=track|artist|album`, `id=<entity id>`, optional `force=1` | Group-wide stats for one entity. | `generatedAt` and `members[].{key,id,count,durationMs,minutes}`. Partial user-level upstream failures are contained per member instead of failing the whole response. |
 | `/api/entity-streams` | `type=track|artist|album`, `id=<entity id>`, `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | A user's play history for one entity. | Normalized stream `items`. |
 | `/api/entity-listeners` | `type=track|artist|album`, `id=<entity id>`, optional `friends=1`, `limit`, `offset`, `force=1` | Entity top listener ranking. | Rows with `position`, `streams`, `playedMs`, `indicator`, and normalized user summary. |
@@ -107,14 +107,14 @@ After changing `GENIUS_ACCESS_TOKEN` in Vercel, redeploy the API so serverless f
 
 | Endpoint | Query/body | Purpose | Response highlights |
 | --- | --- | --- | --- |
-| `/api/orbits` | `GET user=<id>&box=received|sent|all`; `POST { fromUserId, toUserId, track, message? }` | List or create music suggestions between circle members. | Orbit rows include normalized `track`, `status`, timestamps, `targetPlatform`, `listenUrl`, and `listenCountSinceSent`. Uses Postgres/Neon when `DATABASE_URL` or `POSTGRES_URL` is configured, otherwise falls back to in-memory storage. |
+| `/api/orbits` | `GET user=<id>&box=received|sent|all`; `POST { fromUserId, toUserId, track, message? }` | List or create music suggestions between circle members. | Orbit rows include normalized `track`, `status`, timestamps, `targetPlatform`, `listenUrl`, and `listenCountSinceSent`. List reads return stored data immediately; listen audits are refreshed explicitly through `check-listens`. Creation validates known distinct circle members and a usable track identity. Uses Postgres/Neon when `DATABASE_URL` or `POSTGRES_URL` is configured, otherwise falls back to in-memory storage. |
 | `/api/orbits/summary` | `user=<id>` | Count orbit activity for one user. | `received`, `sent`, `sentListened`, and `unread`. |
 | `/api/orbits/:id/seen` | none | Mark an orbit as seen. | Returns updated `orbit`. |
 | `/api/orbits/:id/opened` | none | Mark the listen link as opened. | Returns updated `orbit`. |
 | `/api/orbits/:id/dismiss` | none | Dismiss/archive an orbit. | Returns updated `orbit`. |
 | `/api/orbits/:id/delete-sent` | none | Hide an orbit from the sender's sent list. | Sets `sender_deleted_at`; recipient can still see it. |
 | `/api/orbits/:id/delete-received` | none | Hide an orbit from the recipient's inbox. | Sets `recipient_deleted_at`; sender can still see it. |
-| `/api/orbits/:id/check-listens` | none | Refresh listen count after the orbit was sent. | Uses user entity streams without `force=1` and returns updated `orbit`. |
+| `/api/orbits/:id/check-listens` | none | Refresh listen count after the orbit was sent. | Uses user entity streams without `force=1` and returns updated `orbit`. Clients should call it progressively only for visible stale sent items instead of blocking list reads. |
 
 ### Common response conventions
 

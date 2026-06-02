@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { buildQuery, readOptionalQueryString } from "../api-helpers.js";
 import { resolveUserId } from "../users.js";
 import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
 
@@ -13,6 +14,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const type = String(req.query.type || "") as keyof typeof routeMap;
   const id = String(req.query.id || "");
   const force = req.query.force === "1";
+  const after = readOptionalQueryString(req.query.after);
+  const before = readOptionalQueryString(req.query.before);
 
   if (!user || !type || !id) {
     return res.status(400).json({ ok: false, error: "missing_params" });
@@ -25,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = resolveUserId(user);
 
   const result = await statsfmFetch(
-    `/users/${userId}/streams/${routeMap[type]}/${id}/stats`,
+    `/users/${userId}/streams/${routeMap[type]}/${id}/stats${buildQuery({ after, before })}`,
     { force }
   );
 
