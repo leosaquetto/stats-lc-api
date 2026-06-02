@@ -4,6 +4,16 @@
       "maxDuration": 15
     }
   },
+  "rewrites": [
+    {
+      "source": "/api/orbits/summary",
+      "destination": "/api/orbits?action=summary"
+    },
+    {
+      "source": "/api/orbits/:id/:action",
+      "destination": "/api/orbits?id=:id&pathAction=:action"
+    }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
