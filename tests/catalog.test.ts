@@ -559,6 +559,53 @@ test("lyrics match retries without parenthetical featured artists", async () => 
   ]);
 });
 
+test("lyrics match retries without parenthetical soundtrack source", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+  const queries: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q") || "");
+
+    if (queries.length === 1) {
+      return jsonResponse({ meta: { status: 200 }, response: { hits: [] } });
+    }
+
+    return jsonResponse({
+      meta: { status: 200 },
+      response: {
+        hits: [
+          {
+            result: {
+              id: 13554582,
+              title: "Light Up",
+              full_title: "Light Up by Kylie Minogue",
+              url: "https://genius.com/Kylie-minogue-light-up-lyrics",
+              path: "/Kylie-minogue-light-up-lyrics",
+              lyrics_state: "complete",
+              primary_artist: { name: "Kylie Minogue" },
+            },
+          },
+        ],
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "Light Up (From the Netflix Documentary)", artist: "Kylie Minogue" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.id, 13554582);
+  assert.deepEqual(queries, [
+    "Light Up (From the Netflix Documentary) Kylie Minogue",
+    "Light Up Kylie Minogue",
+  ]);
+});
+
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {
   const track = normalizeTrack(referenceFixtures.track);
   const artist = normalizeArtist(referenceFixtures.artist);

@@ -59,7 +59,7 @@ function stripLyricsTitleVersion(value: unknown) {
 
 function stripLyricsSearchSuffix(value: string) {
   return String(stripLyricsTitleVersion(value))
-    .replace(/\s*[\(\[]\s*(?:feat|ft|with)\.?\b[\s\S]*[\)\]]\s*$/i, "")
+    .replace(/\s*[\(\[]\s*(?:feat|ft|with|from)\.?\b[\s\S]*[\)\]]\s*$/i, "")
     .replace(/\s+(?:feat|ft|with)\.?\b.*$/i, "")
     .trim();
 }
