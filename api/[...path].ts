@@ -18,6 +18,7 @@ import searchHandler from "../lib/api-handlers/search.js";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.js";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.js";
 import statsHandler from "../lib/api-handlers/stats.js";
+import simultaneousHandler from "../lib/api-handlers/simultaneous.js";
 import topHandler from "../lib/api-handlers/top.js";
 import userFriendsHandler from "../lib/api-handlers/user-friends.js";
 import userStreamsHandler from "../lib/api-handlers/user-streams.js";
@@ -46,6 +47,7 @@ const ROUTES: Record<string, Handler> = {
   "stats-cardinality": statsCardinalityHandler,
   "stats-dates": statsDatesHandler,
   stats: statsHandler,
+  simultaneous: simultaneousHandler,
   top: topHandler,
   "user-friends": userFriendsHandler,
   "user-streams": userStreamsHandler,

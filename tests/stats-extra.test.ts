@@ -7,6 +7,7 @@ import groupLiveHandler from "../lib/api-handlers/group-live.ts";
 import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
+import simultaneousHandler from "../lib/api-handlers/simultaneous.ts";
 import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import { USERS } from "../lib/users.ts";
@@ -132,6 +133,114 @@ test("stats-dates returns stable zero-filled buckets", async () => {
   assert.deepEqual(captured.body.weekDays["7"], { count: 1, durationMs: 1000 });
   assert.deepEqual(captured.body.monthDays["1"], { count: 0, durationMs: 0 });
   assert.equal(Object.keys(captured.body.monthDays).length, 31);
+});
+
+test("stats-dates derives real buckets from streams when upstream dates is unavailable", async () => {
+  __setStatsfmNowForTests(Date.UTC(2026, 4, 22, 12, 0, 0, 0));
+  const mayStart = Date.UTC(2026, 4, 1, 3, 0, 0, 0);
+  const mayMid = Date.UTC(2026, 4, 15, 3, 0, 0, 0);
+
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/streams/dates")) {
+      return jsonResponse({ error: "not_found" }, 404);
+    }
+    if (url.pathname.endsWith("/streams/stats")) {
+      return jsonResponse({ items: { count: 2, durationMs: 420000 } });
+    }
+    if (url.pathname.endsWith("/streams")) {
+      return jsonResponse({
+        items: [
+          {
+            endTime: "2026-05-05T15:00:00.000Z",
+            playedMs: 180000,
+          },
+          {
+            endTime: "2026-05-06T00:30:00.000Z",
+            playedMs: 240000,
+          },
+        ],
+      });
+    }
+    return jsonResponse({ error: "unexpected" }, 500);
+  };
+
+  const { res, captured } = createResponseCapture();
+  await statsDatesHandler({
+    query: {
+      user: "leo",
+      after: String(mayStart),
+      before: String(mayMid),
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.reason, "streams_fallback");
+  assert.deepEqual(captured.body.hours["12"], { count: 1, durationMs: 180000 });
+  assert.deepEqual(captured.body.hours["21"], { count: 1, durationMs: 240000 });
+  assert.deepEqual(captured.body.months["5"], { count: 2, durationMs: 420000 });
+  assert.deepEqual(captured.body.weekDays["3"], { count: 2, durationMs: 420000 });
+  assert.deepEqual(captured.body.monthDays["5"], { count: 2, durationMs: 420000 });
+  assert.deepEqual(captured.body.coverage, {
+    source: "streams_fallback",
+    totalCount: 2,
+    requestedCount: 2,
+    aggregatedCount: 2,
+    partial: false,
+    maxStreams: 12000,
+  });
+});
+
+test("simultaneous returns compact historical matches within the requested gap", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    const isLeo = url.pathname.includes(encodeURIComponent(USERS.leo.id));
+    return jsonResponse({
+      items: [
+        {
+          id: isLeo ? "leo-stream" : "gab-stream",
+          endTime: isLeo ? "2026-05-05T15:00:00.000Z" : "2026-05-05T15:07:00.000Z",
+          playedMs: 180000,
+          track: {
+            id: "shared-track",
+            name: "Shared Song",
+            artists: [{ id: "shared-artist", name: "Shared Artist" }],
+            albums: [{ id: "album-1", name: "Shared Album", image: "https://img.test/shared.jpg" }],
+          },
+        },
+      ],
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+  await simultaneousHandler({
+    query: {
+      users: "leo,gab",
+      after: String(Date.parse("2026-05-05T00:00:00.000Z")),
+      before: String(Date.parse("2026-05-06T00:00:00.000Z")),
+      gapMinutes: "10",
+      limit: "5",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.items.length, 1);
+  assert.equal(captured.body.items[0].matchType, "track");
+  assert.equal(captured.body.items[0].gapMinutes, 7);
+  assert.equal(captured.body.items[0].track.name, "Shared Song");
+  assert.deepEqual(captured.body.items[0].users.map((user: any) => user.key), ["leo", "gab"]);
+  assert.deepEqual(captured.body.coverage, {
+    source: "user_streams",
+    requestedUsers: 2,
+    successfulUsers: 2,
+    fetchedByUser: {
+      leo: 1,
+      gab: 1,
+    },
+    perUserLimit: 1000,
+    partial: false,
+    failures: [],
+  });
 });
 
 test("group-live returns lightweight live members with normalized nowPlaying", async () => {

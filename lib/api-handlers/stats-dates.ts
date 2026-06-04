@@ -1,6 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
-import { fetchUserDatesRange, normalizeDatesSummary } from "../user-stats-service.js";
+import {
+  fetchUserDatesFallbackFromStreams,
+  fetchUserDatesRange,
+  normalizeDatesSummary,
+} from "../user-stats-service.js";
 import { sendJsonError, setCacheHeaders, setCorsHeaders } from "../api-helpers.js";
 
 function isLifetimeRequest(after: string) {
@@ -33,8 +37,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const result = await fetchUserDatesRange(userId, after, before, fetchOptions);
 
     if (!result.ok) {
-      // Treat 404 as empty data (upstream endpoint doesn't exist for this user/period)
       if (result.status === 404) {
+        const fallback = await fetchUserDatesFallbackFromStreams(userId, after, before, fetchOptions);
+        if (fallback.ok) {
+          setCorsHeaders(res);
+          setCacheHeaders(res, lifetime ? 900 : 120, lifetime ? false : force, lifetime ? 86400 : 720);
+          return res.status(200).json({
+            ok: true,
+            user,
+            userId,
+            endpoint: result.endpoint,
+            empty: fallback.coverage.aggregatedCount === 0,
+            reason: "streams_fallback",
+            ...normalizeDatesSummary(fallback),
+            coverage: fallback.coverage,
+          });
+        }
+
         setCorsHeaders(res);
         setCacheHeaders(res, lifetime ? 900 : 120, lifetime ? false : force, lifetime ? 86400 : 720);
         return res.status(200).json({
@@ -44,9 +63,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           endpoint: result.endpoint,
           empty: true,
           reason: "upstream_not_found",
-          items: [],
-          dates: [],
-          buckets: {},
+          ...normalizeDatesSummary({ items: {} }),
+          coverage: {
+            source: "unavailable",
+            totalCount: 0,
+            requestedCount: 0,
+            aggregatedCount: 0,
+            partial: false,
+          },
         });
       }
 
