@@ -648,6 +648,55 @@ test("multi-artist top tracks use album detail owner before first track artist",
   assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/album-1")), true);
 });
 
+test("multi-artist tracks can use Apple Music artistName when album owner is missing", async () => {
+  const urls: URL[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    urls.push(url);
+
+    if (url.hostname === "itunes.apple.com" && url.pathname === "/lookup") {
+      return jsonResponse({
+        resultCount: 1,
+        results: [
+          {
+            wrapperType: "track",
+            kind: "song",
+            trackId: 999001,
+            artistName: "Halsey & Amy Lee",
+            trackName: "Hand That Feeds",
+          },
+        ],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [item] = await enrichTrackItemsWithAlbumOwners([
+    {
+      position: 1,
+      streams: 10,
+      track: {
+        id: "track-apple-owner",
+        appleMusicId: "999001",
+        name: "Hand That Feeds - From the Film Ballerina",
+        artists: [
+          { id: "amy-lee", name: "Amy Lee" },
+          { id: "halsey", name: "Halsey" },
+          { id: "evanescence", name: "Evanescence" },
+        ],
+        albums: [{ id: "album-ownerless", name: "Hand That Feeds - Single" }],
+      },
+    },
+  ]);
+
+  const track: any = normalizeTopItem(item, "tracks");
+  assert.equal(track.primaryArtistName, "Halsey");
+  assert.deepEqual(track.secondaryArtists.map((artist: any) => artist.name), ["Amy Lee", "Evanescence"]);
+  assert.equal(urls.some((url) => url.hostname === "itunes.apple.com" && url.searchParams.get("id") === "999001"), true);
+  assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/album-ownerless")), false);
+});
+
 test("ownerless albums infer primary artist from album tracks", async () => {
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));

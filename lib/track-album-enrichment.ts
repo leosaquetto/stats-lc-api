@@ -1,5 +1,6 @@
-import { encodeSegment, getItem } from "./api-helpers.js";
-import { enrichTopTracksWithAlbumOwners } from "./normalize.js";
+import { fetchAppleMusicTrackEvidence } from "./apple-music.js";
+import { encodeSegment, getItem, mapWithConcurrency } from "./api-helpers.js";
+import { enrichTopTracksWithAlbumOwners, normalizeExternalIds } from "./normalize.js";
 import { statsfmFetch } from "./statsfm.js";
 
 type FetchOptions = NonNullable<Parameters<typeof statsfmFetch>[1]>;
@@ -22,6 +23,12 @@ function getTrackValue(item: any) {
 
 function getTrackAlbum(track: any) {
   return track?.albums?.[0] ?? track?.album ?? null;
+}
+
+function getAppleMusicId(track: any) {
+  const directId = readText(track?.appleMusicId);
+  if (directId) return directId;
+  return normalizeExternalIds(track).appleMusic[0] ?? null;
 }
 
 function getTrackId(item: any) {
@@ -152,12 +159,77 @@ function mergeAlbumIntoTrackItem<T>(item: T, album: any): T {
   return enrichedTrack as T;
 }
 
+function mergeAppleMusicAlbumOwner<T>(item: T, artistName: string): T {
+  const track = getTrackValue(item);
+  const album = getTrackAlbum(track);
+  if (!track || !album || albumHasOwner(album)) return item;
+
+  const enrichedAlbum = {
+    ...album,
+    artistName,
+    primaryArtistName: artistName,
+  };
+  const currentAlbums = Array.isArray(track?.albums) ? track.albums : [];
+  const enrichedTrack = {
+    ...track,
+    album: track?.album ? enrichedAlbum : track?.album,
+    albums: currentAlbums.length > 0 ? [enrichedAlbum, ...currentAlbums.slice(1)] : track?.albums,
+    albumArtistName: artistName,
+  };
+
+  if ((item as any)?.track) {
+    return {
+      ...(item as any),
+      track: enrichedTrack,
+    };
+  }
+
+  return enrichedTrack as T;
+}
+
 function needsAlbumOwnerDetail(item: any) {
   const track = getTrackValue(item);
   if (!hasMultipleArtists(track)) return false;
 
   const album = getTrackAlbum(track);
   return Boolean(album && !albumHasOwner(album) && albumIdForDetail(album));
+}
+
+function needsAppleMusicOwnerEvidence(item: any) {
+  const track = getTrackValue(item);
+  if (!hasMultipleArtists(track)) return false;
+
+  const album = getTrackAlbum(track);
+  return Boolean(album && !albumHasOwner(album) && getAppleMusicId(track));
+}
+
+async function enrichTracksWithAppleMusicOwners<T>(
+  items: T[],
+  options: FetchOptions
+): Promise<T[]> {
+  const candidates = items
+    .filter(needsAppleMusicOwnerEvidence)
+    .map((item: any) => ({ item, appleMusicId: getAppleMusicId(getTrackValue(item)) }))
+    .filter((candidate): candidate is { item: T; appleMusicId: string } => Boolean(candidate.appleMusicId))
+    .slice(0, 4);
+
+  if (candidates.length === 0) return items;
+
+  const evidenceByAppleMusicId = new Map<string, string>();
+  await mapWithConcurrency(candidates, 4, async ({ appleMusicId }) => {
+    if (evidenceByAppleMusicId.has(appleMusicId)) return;
+    const evidence = await fetchAppleMusicTrackEvidence(appleMusicId, { force: options.force });
+    if (evidence?.artistName) evidenceByAppleMusicId.set(appleMusicId, evidence.artistName);
+  });
+
+  if (evidenceByAppleMusicId.size === 0) return items;
+
+  return items.map((item: any) => {
+    if (!needsAppleMusicOwnerEvidence(item)) return item;
+    const appleMusicId = getAppleMusicId(getTrackValue(item));
+    const artistName = appleMusicId ? evidenceByAppleMusicId.get(appleMusicId) : null;
+    return artistName ? mergeAppleMusicAlbumOwner(item, artistName) : item;
+  });
 }
 
 async function fetchAlbumDetails(albumIds: string[], options: FetchOptions) {
@@ -429,21 +501,23 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
     ? enrichTopTracksWithAlbumOwners(streamEnriched, options.albumItems)
     : streamEnriched;
 
+  const appleMusicEnriched = await enrichTracksWithAppleMusicOwners(lookupEnriched as T[], options);
+
   const albumIds = [
     ...new Set(
-      lookupEnriched
+      appleMusicEnriched
         .filter(needsAlbumOwnerDetail)
         .map((item: any) => albumIdForDetail(getTrackAlbum(getTrackValue(item))))
         .filter(Boolean)
     ),
   ] as string[];
 
-  if (albumIds.length === 0) return lookupEnriched as T[];
+  if (albumIds.length === 0) return appleMusicEnriched as T[];
 
   const albumDetails = await fetchAlbumDetails(albumIds, options);
 
   return enrichTopTracksWithAlbumOwners(
-    lookupEnriched,
+    appleMusicEnriched,
     albumDetails.filter(Boolean).map((album) => ({ album }))
   ) as T[];
 }
