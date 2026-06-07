@@ -4,10 +4,12 @@ import { extractUserPlatform, normalizeRecentItem } from "../normalize.js";
 import { statsfmFetch } from "../statsfm.js";
 import { fetchUserRecentStreams } from "../user-streams-service.js";
 import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
-import { mapWithConcurrency, sendJsonError, setCacheHeaders } from "../api-helpers.js";
-import { attachDominantColorToRecentItem } from "../artwork-color.js";
+import { sendJsonError, setCacheHeaders } from "../api-helpers.js";
 
 const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
+const LIVE_ENDPOINT_DEADLINE_MS = 1900;
+const LIVE_USER_REQUEST_TIMEOUT_MS = 950;
+const LIVE_ENRICHMENT_BUDGET_MS = 450;
 
 function sanitizeDebugValue(value: any): any {
   if (Array.isArray(value)) return value.map(sanitizeDebugValue);
@@ -72,20 +74,50 @@ async function fetchSafe<T>(promise: Promise<T>) {
   }
 }
 
+async function withTimeoutValue<T>(promise: Promise<T>, timeoutMs: number, fallback: T) {
+  if (timeoutMs <= 0) return fallback;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function getLiveUserBundle(
   key: string,
   user: { id: string; platform?: string },
   force: boolean,
   debug: boolean,
-  includeProfile: boolean
+  includeProfile: boolean,
+  deadline: number
 ) {
   const upstreamForce = false;
+  const requestTimeoutMs = Math.min(
+    LIVE_USER_REQUEST_TIMEOUT_MS,
+    Math.max(250, deadline - Date.now())
+  );
 
   const [profileResult, recentResult] = await Promise.all([
     includeProfile
-      ? fetchSafe(statsfmFetch(`/users/${user.id}`, { force: upstreamForce, cacheProfile: "live" }))
+      ? fetchSafe(statsfmFetch(`/users/${user.id}`, {
+          force: upstreamForce,
+          cacheProfile: "live",
+          requestTimeoutMs,
+          maxRetries: 0,
+        }))
       : Promise.resolve({ ok: true, status: 200, endpoint: null, data: { item: null } }),
-    fetchSafe(fetchUserRecentStreams(user.id, { limit: 1 }, { force: upstreamForce, cacheProfile: "live" })),
+    fetchSafe(fetchUserRecentStreams(user.id, { limit: 1 }, {
+      force: upstreamForce,
+      cacheProfile: "live",
+      requestTimeoutMs,
+      maxRetries: 0,
+    })),
   ]);
 
   const profile = profileResult && typeof profileResult === "object" && "ok" in profileResult
@@ -110,16 +142,26 @@ async function getLiveUserBundle(
     const needsTrackStreamEvidence = recentItems.some((item: any) => item?.albumId == null);
 
     try {
-      enrichedItems = await enrichTrackItemsWithAlbumOwners(recentItems, {
-        force: upstreamForce,
-        userId: user.id,
-        // Keep /api/group-live lightweight: only hit the per-track streams surface
-        // when the stream row does not already provide an albumId.
-        useTrackStreamEvidence: needsTrackStreamEvidence,
-        trackStreamEvidenceStrategy: needsTrackStreamEvidence ? "latest" : undefined,
-        cacheProfile: "live",
-        requestTimeoutMs: 2000, // 2s timeout for enrichment
-      });
+      const enrichmentBudgetMs = Math.min(
+        LIVE_ENRICHMENT_BUDGET_MS,
+        Math.max(0, deadline - Date.now() - 100)
+      );
+      enrichedItems = await withTimeoutValue(
+        enrichTrackItemsWithAlbumOwners(recentItems, {
+          force: upstreamForce,
+          userId: user.id,
+          // Keep direct stream album evidence, but never let optional detail work block live.
+          useTrackStreamEvidence: needsTrackStreamEvidence,
+          trackStreamEvidenceStrategy: needsTrackStreamEvidence ? "latest" : undefined,
+          cacheProfile: "live",
+          requestTimeoutMs: enrichmentBudgetMs,
+        }),
+        enrichmentBudgetMs,
+        recentItems
+      );
+      if (enrichmentBudgetMs === 0 || (needsTrackStreamEvidence && enrichedItems === recentItems)) {
+        enrichmentWarning = "album_enrichment_deferred";
+      }
     } catch (error: any) {
       // Enrichment failed: use original items, add warning
       enrichedItems = recentItems;
@@ -131,7 +173,7 @@ async function getLiveUserBundle(
   }
 
   const recentItemRaw = enrichedItems[0] ?? null;
-  const nowPlayingRaw = recentItemRaw ? await attachDominantColorToRecentItem(normalizeRecentItem(recentItemRaw)) : null;
+  const nowPlayingRaw = recentItemRaw ? normalizeRecentItem(recentItemRaw) : null;
   const platformDecision = extractUserPlatform(profileRaw, key);
 
   const warnings = [
@@ -189,14 +231,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const debug = req.query.debug === "1";
   const includeProfile = req.query.profile !== "0";
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string; platform?: string }]>;
+  const deadline = Date.now() + LIVE_ENDPOINT_DEADLINE_MS;
 
   try {
-    const settled = await mapWithConcurrency(users, Math.min(users.length, 5), ([key, user]) =>
-      getLiveUserBundle(String(key), user, force, debug, includeProfile)
-    );
+    const settled = new Array<PromiseSettledResult<Awaited<ReturnType<typeof getLiveUserBundle>>> | undefined>(users.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < users.length && Date.now() < deadline) {
+        const index = cursor++;
+        const [key, user] = users[index];
+        try {
+          settled[index] = {
+            status: "fulfilled",
+            value: await getLiveUserBundle(String(key), user, force, debug, includeProfile, deadline),
+          };
+        } catch (reason) {
+          settled[index] = { status: "rejected", reason };
+        }
+      }
+    };
+    const workers = Array.from({ length: Math.min(users.length, 5) }, worker);
+    await withTimeoutValue(Promise.all(workers), Math.max(0, deadline - Date.now()), []);
 
-    const members = settled.map((result, index) => {
-      if (result.status === "fulfilled") return result.value;
+    const members = users.map((_, index) => {
+      const result = settled[index];
+      if (result?.status === "fulfilled") return result.value;
 
       const [key, user] = users[index];
 
@@ -215,7 +274,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           rawValue: user.platform ?? null,
         },
         nowPlaying: null,
-        error: String(result.reason),
+        warnings: ["live_deadline_exceeded"],
+        error: result?.status === "rejected" ? String(result.reason) : "deadline_exceeded",
       };
     });
 

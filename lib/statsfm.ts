@@ -1,8 +1,8 @@
 import { getMonthRangeSegments, TIMEZONE_SP } from "./time.js";
 
 const API_BASE = "https://api.stats.fm/api/v1";
-const DEFAULT_FRESH_TTL_MS = 60_000;
-const STALE_TTL_MS = 10 * 60_000;
+const DEFAULT_FRESH_TTL_MS = 3 * 60_000;
+const STALE_TTL_MS = 15 * 60_000;
 const FORCE_COOLDOWN_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const RETRY_DELAY_MS = 300;

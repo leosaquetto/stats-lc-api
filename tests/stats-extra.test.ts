@@ -8,6 +8,7 @@ import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
 import simultaneousHandler from "../lib/api-handlers/simultaneous.ts";
+import topHandler from "../lib/api-handlers/top.ts";
 import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import { USERS } from "../lib/users.ts";
@@ -336,6 +337,24 @@ test("group-live uses stream album id to correct live now track album", async ()
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.members[0].nowPlaying.track.albumId, "album-main");
   assert.equal(captured.body.members[0].nowPlaying.track.albumName, "Main Album");
+});
+
+test("top normalizes an upstream empty-range 400 into an empty successful payload", async () => {
+  globalThis.fetch = async () => jsonResponse({ error: "empty_range" }, 400);
+  const { res, captured } = createResponseCapture();
+
+  await topHandler({
+    query: {
+      user: "leo",
+      type: "tracks",
+      period: "week",
+      limit: "10",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.deepEqual(captured.body.items, []);
+  assert.deepEqual(captured.body.warnings, ["upstream_empty_range"]);
 });
 
 test("user-streams can resolve historical stream albums", async () => {

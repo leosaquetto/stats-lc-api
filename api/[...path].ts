@@ -24,6 +24,7 @@ import userFriendsHandler from "../lib/api-handlers/user-friends.js";
 import userStreamsHandler from "../lib/api-handlers/user-streams.js";
 import userHandler from "../lib/api-handlers/user.js";
 import { sendJsonError, setCorsHeaders } from "../lib/api-helpers.js";
+import { randomUUID } from "node:crypto";
 
 type Handler = (req: VercelRequest, res: VercelResponse) => unknown;
 
@@ -71,7 +72,38 @@ function getRoutePath(req: VercelRequest) {
 }
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
+  const startedAt = performance.now();
+  const requestId = String(req.headers["x-request-id"] || randomUUID());
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+    const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    if (!res.headersSent) {
+      res.setHeader("Server-Timing", `app;dur=${durationMs}`);
+    }
+    console.info(JSON.stringify({
+      event: "api_request",
+      requestId,
+      method: req.method || "GET",
+      route: getRoutePath(req) || "unknown",
+      status: res.statusCode,
+      durationMs,
+    }));
+  };
+  const originalJson = res.json.bind(res);
+  const originalEnd = res.end.bind(res);
+  res.json = ((body: any) => {
+    finalize();
+    return originalJson(body);
+  }) as typeof res.json;
+  res.end = ((...args: Parameters<typeof res.end>) => {
+    finalize();
+    return originalEnd(...args);
+  }) as typeof res.end;
+
   setCorsHeaders(res);
+  res.setHeader("X-Request-Id", requestId);
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();

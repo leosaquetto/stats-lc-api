@@ -12,12 +12,16 @@ function getAfterFromPeriod(period: string) {
     return d.getTime();
   }
 
-  if (period === "week") {
+  if (period === "week" || period === "7days") {
     return Date.now() - 7 * 24 * 60 * 60 * 1000;
   }
 
   if (period === "month") {
     return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  }
+
+  if (period === "year" || period === "current_year") {
+    return new Date(now.getFullYear(), 0, 1).getTime();
   }
 
   return 0;
@@ -46,6 +50,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const result = await fetchUserTop(userId, type, after, limit, { force: upstreamForce });
 
     if (!result.ok) {
+      if (result.status === 400) {
+        setCacheHeaders(res, after === 0 ? 900 : 300, upstreamForce, after === 0 ? 86400 : 1800);
+        return res.status(200).json({
+          ok: true,
+          user,
+          userId,
+          type,
+          period,
+          after,
+          endpoint: result.endpoint,
+          items: [],
+          warnings: ["upstream_empty_range"],
+        });
+      }
       return sendJsonError(res, result.status || 502, "upstream_error", {
         endpoint: result.endpoint,
         upstreamStatus: result.status,

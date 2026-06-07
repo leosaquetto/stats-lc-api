@@ -51,7 +51,7 @@ export function setCorsHeaders(
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
-  res.setHeader("Access-Control-Expose-Headers", "Cache-Control");
+  res.setHeader("Access-Control-Expose-Headers", "Cache-Control, Server-Timing, X-Request-Id");
 }
 
 export function setCacheHeaders(

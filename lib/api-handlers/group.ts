@@ -18,7 +18,6 @@ import {
   enrichAlbumItemsWithOwners,
   enrichTrackItemsWithAlbumOwners,
 } from "../track-album-enrichment.js";
-import { attachDominantColorToItems, attachDominantColorToRecentItem } from "../artwork-color.js";
 import {
   getStartOfMonthSPMs,
   getStartOfTodaySPMs,
@@ -183,20 +182,10 @@ async function getUserBundle(
   const recentItemRaw: any = recentItems[0] ?? null;
 
   const platformDecision = extractUserPlatform(profileRaw, key);
-  const nowPlayingRaw =
-    recentItems[0]
-      ? await attachDominantColorToRecentItem(normalizeRecentItem(recentItems[0]))
-      : null;
-
-  const recentNormalized = await attachDominantColorToItems(recentItems.map(normalizeRecentItem), 5);
-  const normalizedTopTracks = await attachDominantColorToItems(
-    topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")),
-    3
-  );
-  const normalizedTopAlbums = await attachDominantColorToItems(
-    topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")),
-    3
-  );
+  const nowPlayingRaw = recentItems[0] ? normalizeRecentItem(recentItems[0]) : null;
+  const recentNormalized = recentItems.map(normalizeRecentItem);
+  const normalizedTopTracks = topTrackItems.map((item: any) => normalizeTopItem(item, "tracks")).filter(Boolean);
+  const normalizedTopAlbums = topAlbumItems.map((item: any) => normalizeTopItem(item, "albums")).filter(Boolean);
 
   const catalogSummary = recentNormalized.reduce(
     (acc: any, item: any) => {
@@ -406,7 +395,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     : undefined;
 
-    setCacheHeaders(res, 60, debug, 600);
+    setCacheHeaders(res, 180, debug, 900);
     setCorsHeaders(res);
 
     const hasWarnings = members.some((m: any) => m.warnings?.length > 0);
