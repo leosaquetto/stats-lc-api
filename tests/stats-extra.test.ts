@@ -339,6 +339,28 @@ test("group-live uses stream album id to correct live now track album", async ()
   assert.equal(captured.body.members[0].nowPlaying.track.albumName, "Main Album");
 });
 
+test("group-live returns partial members when the endpoint deadline expires", {
+  timeout: 4_000,
+}, async () => {
+  globalThis.fetch = () => new Promise<Response>(() => {});
+  const { res, captured } = createResponseCapture();
+  const startedAt = Date.now();
+
+  await groupLiveHandler({ query: { profile: "0" } } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.ok, true);
+  assert.equal(captured.body.members.length, configuredUserCount);
+  assert.equal(Date.now() - startedAt < 2_500, true);
+  assert.equal(captured.body.members.every((member: any) => member.nowPlaying === null), true);
+  assert.equal(
+    captured.body.members.every((member: any) =>
+      member.warnings.includes("live_deadline_exceeded")
+    ),
+    true
+  );
+});
+
 test("top normalizes an upstream empty-range 400 into an empty successful payload", async () => {
   globalThis.fetch = async () => jsonResponse({ error: "empty_range" }, 400);
   const { res, captured } = createResponseCapture();
