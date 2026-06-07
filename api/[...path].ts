@@ -81,6 +81,7 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
     if (!res.headersSent) {
       res.setHeader("Server-Timing", `app;dur=${durationMs}`);
+      res.setHeader("X-App-Timing", `app;dur=${durationMs}`);
     }
     console.info(JSON.stringify({
       event: "api_request",
@@ -107,6 +108,7 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   // Set the header before dispatch so Vercel preserves it even when a response
   // helper commits headers before our json/end wrappers run.
   res.setHeader("Server-Timing", "app;dur=0");
+  res.setHeader("X-App-Timing", "app;dur=0");
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
