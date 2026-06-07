@@ -104,6 +104,9 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
 
   setCorsHeaders(res);
   res.setHeader("X-Request-Id", requestId);
+  // Set the header before dispatch so Vercel preserves it even when a response
+  // helper commits headers before our json/end wrappers run.
+  res.setHeader("Server-Timing", "app;dur=0");
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
