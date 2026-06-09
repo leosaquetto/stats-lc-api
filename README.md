@@ -32,6 +32,10 @@ avulso como substituto do comando suportado pelo repo.
 
 - Manter payloads publicos retrocompativeis.
 - `/api/group-live?profile=0` e a superficie leve de polling.
+- `/api/group-live?statsUser=<usuario>` pode acrescentar `featuredStats` sem
+  alterar chamadas antigas.
+- `/api/latest-discovery?user=<usuario>` so devolve uma descoberta quando a
+  cobertura permite provar a primeira reproducao.
 - `/api/group` e dados frios podem usar cache/stale de minutos.
 - `force=1` fica restrito a acoes manuais claras.
 - Nao adicionar Redis/KV, persistencia pesada ou `/api/home-bundle` sem pedido

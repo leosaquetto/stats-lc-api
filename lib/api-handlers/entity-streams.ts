@@ -26,6 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     offset: readOptionalQueryString(req.query.offset),
     after: readOptionalQueryString(req.query.after),
     before: readOptionalQueryString(req.query.before),
+    order: readOptionalQueryString(req.query.order),
   };
 
   const result = await fetchUserEntityStreams(userId, ENTITY_ROUTE_MAP[type], id, params, { force });

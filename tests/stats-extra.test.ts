@@ -4,6 +4,7 @@ import type { VercelResponse } from "@vercel/node";
 import entityGroupStatsHandler from "../lib/api-handlers/entity-group-stats.ts";
 import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
 import groupLiveHandler from "../lib/api-handlers/group-live.ts";
+import latestDiscoveryHandler from "../lib/api-handlers/latest-discovery.ts";
 import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
@@ -339,6 +340,48 @@ test("group-live uses stream album id to correct live now track album", async ()
   assert.equal(captured.body.members[0].nowPlaying.track.albumName, "Main Album");
 });
 
+test("group-live optionally returns fresh daily stats for the requested member", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/streams/stats")) {
+      return jsonResponse({
+        items: {
+          count: 27,
+          durationMs: 5400000,
+        },
+      });
+    }
+
+    if (url.pathname.includes("/streams/recent")) {
+      return jsonResponse({ items: [] });
+    }
+
+    return jsonResponse({ item: null });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await groupLiveHandler({ query: { profile: "0", statsUser: "leo" } } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.featuredStats.userId, USERS.leo.id);
+  assert.equal(captured.body.featuredStats.streams, 27);
+  assert.equal(captured.body.featuredStats.durationMs, 5400000);
+  assert.match(captured.body.featuredStats.day, /^\d{2}\/\d{2}\/\d{4}$|^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(typeof captured.body.featuredStats.generatedAt, "string");
+});
+
+test("group-live preserves the old payload when statsUser is omitted", async () => {
+  globalThis.fetch = async () => jsonResponse({ items: [] });
+  const { res, captured } = createResponseCapture();
+
+  await groupLiveHandler({ query: { profile: "0" } } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal("featuredStats" in captured.body, false);
+});
+
 test("group-live returns partial members when the endpoint deadline expires", {
   timeout: 4_000,
 }, async () => {
@@ -359,6 +402,89 @@ test("group-live returns partial members when the endpoint deadline expires", {
     ),
     true
   );
+});
+
+test("latest-discovery returns the newest proven first listen", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/streams/recent")) {
+      return jsonResponse({
+        items: [
+          {
+            id: "recent-new",
+            endTime: "2026-06-08T18:00:00.000Z",
+            trackId: "track-new",
+            track: {
+              id: "track-new",
+              name: "New Discovery",
+              artists: [{ id: "artist-new", name: "New Artist" }],
+              albums: [{ id: "album-new", name: "New Album", image: "https://img.test/new.jpg" }],
+            },
+          },
+          {
+            id: "recent-old",
+            endTime: "2026-06-07T18:00:00.000Z",
+            trackId: "track-old",
+            track: {
+              id: "track-old",
+              name: "Old Favorite",
+              artists: [{ id: "artist-old", name: "Old Artist" }],
+              albums: [{ id: "album-old", name: "Old Album", image: "https://img.test/old.jpg" }],
+            },
+          },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/streams/tracks/track-new")) {
+      assert.equal(url.searchParams.get("order"), "asc");
+      return jsonResponse({
+        items: [{ id: "first-new", endTime: "2026-06-08T18:00:00.000Z" }],
+      });
+    }
+
+    if (url.pathname.endsWith("/streams/tracks/track-old")) {
+      return jsonResponse({
+        items: [{ id: "first-old", endTime: "2024-01-01T12:00:00.000Z" }],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const { res, captured } = createResponseCapture();
+  await latestDiscoveryHandler({ query: { user: "leo" } } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.coverage.complete, true);
+  assert.equal(captured.body.item.track.name, "New Discovery");
+  assert.equal(captured.body.firstPlayedAt, "2026-06-08T18:00:00.000Z");
+});
+
+test("latest-discovery does not claim a discovery when proof is incomplete", async () => {
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/streams/recent")) {
+      return jsonResponse({
+        items: [{
+          id: "recent-1",
+          endTime: "2026-06-08T18:00:00.000Z",
+          trackId: "track-1",
+          track: { id: "track-1", name: "Unverified" },
+        }],
+      });
+    }
+    return jsonResponse({ error: "temporary_failure" }, 503);
+  };
+
+  const { res, captured } = createResponseCapture();
+  await latestDiscoveryHandler({ query: { user: "leo" } } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.coverage.complete, false);
+  assert.equal(captured.body.item, null);
+  assert.equal(captured.body.firstPlayedAt, null);
 });
 
 test("top normalizes an upstream empty-range 400 into an empty successful payload", async () => {

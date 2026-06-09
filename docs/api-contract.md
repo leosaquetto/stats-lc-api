@@ -47,6 +47,7 @@ Album selection for user-scoped track payloads has its own durable rule in [`doc
 - Cache/debug metadata is intentionally kept out of normal endpoint payloads and is exposed only via `/api/health` and optional debug surfaces.
 - Live now-playing calls may opt into an internal `cacheProfile: "live"` with a shorter fresh/stale window. This is still handled inside `statsfmFetch` and does not change normal endpoint payloads.
 - `/api/group-live` has an internal 1.9-second endpoint deadline and may return partial members with `live_deadline_exceeded` warnings instead of blocking the full poll.
+- Optional `statsUser=<user>` adds `featuredStats.{userId,day,streams,durationMs,generatedAt}` using the 20-second live cache and a short request deadline. Omitting it preserves the previous response shape.
 - Optional dominant-color work is intentionally outside the `/api/group-live` and `/api/group` critical paths. Clients keep existing/local colors while richer endpoints refresh them.
 - `/api/group` uses a 180-second CDN fresh window with a 900-second stale-while-revalidate window.
 - Successful API responses expose `X-Request-Id`, `Server-Timing`, and `X-App-Timing`. `X-App-Timing` is the platform-safe fallback when `Server-Timing` is stripped.
@@ -74,7 +75,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | Endpoint | Query | Purpose | Response highlights |
 | --- | --- | --- | --- |
 | `/api/group` | optional `force=1`, `debug=1` | Full group dashboard payload. | `members`, `rankings.today|week|month`, each member's `profile`, `platform`, `catalogSummary`, `nowPlaying`, `recent`, `stats`, `tops`, and per-section `errors`. Debug includes Sao Paulo range anchors and sanitized upstream/cache details. |
-| `/api/group-live` | optional `force=1`, `debug=1` | Lightweight Home/now-playing polling surface. | `ok`, `source`, `generatedAt`, and `members`. Each member includes `key`, `id`, minimal `profile`, `platform`, and `nowPlaying`. It intentionally omits stats, tops, leaderboard data, and cache metadata. |
+| `/api/group-live` | optional `force=1`, `debug=1`, `statsUser=<user>` | Lightweight Home/now-playing polling surface. | `ok`, `source`, `generatedAt`, and `members`. A valid `statsUser` adds optional `featuredStats`; calls without it remain backward compatible. |
 | `/api/user` | `user=<user>`, optional `force=1`, `debug=1` | One user profile summary. | `profile`, resolved `platform`, `legacy` upstream result, and sanitized `raw` only when `debug=1`. |
 | `/api/health` | none | Operational snapshot for agents and debugging. | `ok`, `service`, `time`, and `statsfm` cache/retry/metric snapshot. Cache/debug metadata belongs here, not in normal payloads. |
 
@@ -115,6 +116,7 @@ After changing `GENIUS_ACCESS_TOKEN` in Vercel, redeploy the API so serverless f
 | Endpoint | Query | Purpose | Response highlights |
 | --- | --- | --- | --- |
 | `/api/search` | `q=<query>` or `query=<query>`, optional `type=track,artist,album,user`, `limit`, `force=1` | Typed search facade. | `items[]` shaped as `{ type, item }`, with normalized track/artist/album/user payloads when recognized. |
+| `/api/latest-discovery` | `user=<user>` | Finds the most recent track whose first play can be proven. | Pages recent streams, deduplicates track IDs, queries first entity streams with `order=asc`, uses concurrency 3, deadline/cache/stale protection, and returns `item`, `firstPlayedAt`, and `coverage`. Partial proof returns `coverage.complete=false` with no claimed item. |
 | `/api/compare` | `users=<csv>` with 2 to 5 aliases or stats.fm IDs/custom IDs, optional `period=4w|6m|all|month|week`, explicit `after`/`before` epoch ms, `limit` default `250` max `500`, `commonMode=any|all`, `minSharedBy=2..userCount`, `force=1` | Rich comparison across users. | `users`, `summaryByUser`, `commonFilter`, `common.tracks|artists|albums|genres`, `timeByUser`, `firstStreamsByUser`, `lastStreamsByUser`, and per-user partial `errors`. Explicit `after` takes priority over `period`; presets are calculated in the Sao Paulo timezone. Common rows match entity `id` first and `externalIds.spotify/appleMusic` as catalog fallback, expose original per-user ranks, `score`, and `sharedByCount`. By default common rows are shared by at least 2 users; `commonMode=all` requires every requested user, and `minSharedBy` can set an explicit threshold. |
 
 ### Orbits endpoints

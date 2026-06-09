@@ -1,8 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { USERS } from "../users.js";
 import { extractUserPlatform, normalizeRecentItem } from "../normalize.js";
-import { statsfmFetch } from "../statsfm.js";
+import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
+import { getStartOfTodaySPMs, TIMEZONE_SP } from "../time.js";
 import { fetchUserRecentStreams } from "../user-streams-service.js";
+import { fetchUserStatsRange } from "../user-stats-service.js";
 import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 import { sendJsonError, setCacheHeaders } from "../api-helpers.js";
 
@@ -10,6 +12,20 @@ const SENSITIVE_KEY_PATTERN = /(token|authorization|cookie|secret|session)/i;
 const LIVE_ENDPOINT_DEADLINE_MS = 1900;
 const LIVE_USER_REQUEST_TIMEOUT_MS = 950;
 const LIVE_ENRICHMENT_BUDGET_MS = 450;
+const LIVE_STATS_REQUEST_TIMEOUT_MS = 850;
+const DAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: TIMEZONE_SP,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function getDayKey(date: Date) {
+  const parts = Object.fromEntries(
+    DAY_FORMATTER.formatToParts(date).map((part) => [part.type, part.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 
 function sanitizeDebugValue(value: any): any {
   if (Array.isArray(value)) return value.map(sanitizeDebugValue);
@@ -87,6 +103,51 @@ async function withTimeoutValue<T>(promise: Promise<T>, timeoutMs: number, fallb
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function resolveStatsUser(value: unknown) {
+  const requested = Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+  if (!requested) return null;
+
+  const entry = Object.entries(USERS).find(([key, user]) =>
+    key === requested || user.id === requested
+  );
+  return entry ? { key: String(entry[0]), id: entry[1].id } : null;
+}
+
+async function getFeaturedStats(
+  statsUser: { key: string; id: string } | null,
+  generatedAt: string,
+  deadline: number
+) {
+  if (!statsUser) return null;
+
+  const after = getStartOfTodaySPMs();
+  const requestTimeoutMs = Math.min(
+    LIVE_STATS_REQUEST_TIMEOUT_MS,
+    Math.max(250, deadline - Date.now())
+  );
+  if (requestTimeoutMs <= 250 && Date.now() >= deadline) return null;
+
+  const result = await fetchSafe(fetchUserStatsRange(statsUser.id, after, null, {
+    force: false,
+    aggregateMode: "none",
+    cacheProfile: "live",
+    requestTimeoutMs,
+    maxRetries: 0,
+  }));
+
+  if (!result || typeof result !== "object" || !("ok" in result) || !result.ok) {
+    return null;
+  }
+
+  return {
+    userId: statsUser.id,
+    day: getDayKey(new Date(after)),
+    streams: getCount(result.data),
+    durationMs: getDurationMs(result.data),
+    generatedAt,
+  };
 }
 
 async function getLiveUserBundle(
@@ -230,10 +291,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const force = req.query.force === "1";
   const debug = req.query.debug === "1";
   const includeProfile = req.query.profile !== "0";
+  const statsUser = resolveStatsUser(req.query.statsUser);
   const users = Object.entries(USERS) as Array<[keyof typeof USERS, { id: string; platform?: string }]>;
   const deadline = Date.now() + LIVE_ENDPOINT_DEADLINE_MS;
+  const generatedAt = new Date().toISOString();
 
   try {
+    const featuredStatsPromise = getFeaturedStats(statsUser, generatedAt, deadline);
     const settled = new Array<PromiseSettledResult<Awaited<ReturnType<typeof getLiveUserBundle>>> | undefined>(users.length);
     let cursor = 0;
     const worker = async () => {
@@ -252,6 +316,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     const workers = Array.from({ length: Math.min(users.length, 5) }, worker);
     await withTimeoutValue(Promise.all(workers), Math.max(0, deadline - Date.now()), []);
+    const featuredStats = await withTimeoutValue(
+      featuredStatsPromise,
+      Math.max(0, deadline - Date.now()),
+      null
+    );
 
     const members = users.map((_, index) => {
       const result = settled[index];
@@ -284,8 +353,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       ok: true,
       source: "stats.fm-api",
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       members,
+      ...(featuredStats ? { featuredStats } : {}),
     });
   } catch (error: any) {
     return sendJsonError(res, 503, "group_live_failed", {
