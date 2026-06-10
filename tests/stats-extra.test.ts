@@ -3,6 +3,7 @@ import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
 import entityGroupStatsHandler from "../lib/api-handlers/entity-group-stats.ts";
 import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
+import groupActivityHandler from "../lib/api-handlers/group-activity.ts";
 import groupLiveHandler from "../lib/api-handlers/group-live.ts";
 import latestDiscoveryHandler from "../lib/api-handlers/latest-discovery.ts";
 import replayHandler from "../lib/api-handlers/replay.ts";
@@ -34,10 +35,12 @@ function createResponseCapture() {
   const captured = {
     statusCode: 200,
     body: undefined as any,
+    headers: {} as Record<string, string>,
   };
 
   const res = {
-    setHeader() {
+    setHeader(name: string, value: string) {
+      captured.headers[name.toLowerCase()] = value;
       return this;
     },
     status(code: number) {
@@ -399,6 +402,108 @@ test("group-live returns partial members when the endpoint deadline expires", {
   assert.equal(
     captured.body.members.every((member: any) =>
       member.warnings.includes("live_deadline_exceeded")
+    ),
+    true
+  );
+});
+
+test("group-activity hydrates track-only stream rows and keeps empty users partial", async () => {
+  const streamRequestsByUser = new Map<string, number>();
+
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    const streamsMatch = url.pathname.match(/\/users\/([^/]+)\/streams$/);
+
+    if (streamsMatch) {
+      const userId = decodeURIComponent(streamsMatch[1]);
+      streamRequestsByUser.set(userId, (streamRequestsByUser.get(userId) ?? 0) + 1);
+      assert.equal(url.searchParams.get("limit"), "1");
+
+      if (userId === USERS.savio.id) {
+        return jsonResponse({
+          items: [{
+            id: "savio-stream",
+            trackId: "track-love-controller",
+            trackName: "Love Controller",
+            endTime: "2026-06-07T17:52:00.000Z",
+          }],
+        });
+      }
+
+      return jsonResponse({ items: [] });
+    }
+
+    if (url.pathname.endsWith("/tracks/track-love-controller")) {
+      return jsonResponse({
+        item: {
+          id: "track-love-controller",
+          name: "Love Controller",
+          artists: [{ id: "artist-demi", name: "Demi Lovato" }],
+          albums: [{
+            id: "album-deep",
+            name: "It's Not That Deep",
+            image: "https://img.test/love-controller.jpg",
+            artists: [{ id: "artist-demi", name: "Demi Lovato" }],
+          }],
+          externalIds: {
+            spotify: ["spotify-love-controller"],
+          },
+        },
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const { res, captured } = createResponseCapture();
+  await groupActivityHandler({ query: {} } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.ok, true);
+  assert.equal(captured.body.members.length, configuredUserCount);
+
+  const savio = captured.body.members.find((member: any) => member.key === "savio");
+  assert.equal(savio.userId, USERS.savio.id);
+  assert.equal(savio.activity.isNow, false);
+  assert.equal(savio.activity.timestamp, "2026-06-07T17:52:00.000Z");
+  assert.equal(savio.activity.track.name, "Love Controller");
+  assert.equal(savio.activity.track.primaryArtistName, "Demi Lovato");
+  assert.equal(savio.activity.track.image, "https://img.test/love-controller.jpg");
+
+  const emptyMember = captured.body.members.find((member: any) => member.key === "leo");
+  assert.equal(emptyMember.activity, null);
+  assert.deepEqual(emptyMember.warnings, ["no_streams"]);
+  assert.equal(streamRequestsByUser.size, configuredUserCount);
+  assert.match(captured.headers["cache-control"], /s-maxage=180/);
+
+  const second = createResponseCapture();
+  await groupActivityHandler({ query: {} } as any, second.res);
+  assert.equal(second.captured.statusCode, 200);
+  assert.equal(
+    [...streamRequestsByUser.values()].every((requestCount) => requestCount === 1),
+    true
+  );
+});
+
+test("group-activity returns a partial response when upstream requests time out", {
+  timeout: 9_000,
+}, async () => {
+  globalThis.fetch = () => new Promise<Response>((resolve) => {
+    setTimeout(() => resolve(jsonResponse({ error: "slow_upstream" }, 503)), 2_000);
+  });
+
+  const { res, captured } = createResponseCapture();
+  const startedAt = Date.now();
+  await groupActivityHandler({ query: {} } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.ok, true);
+  assert.equal(captured.body.partial, true);
+  assert.equal(captured.body.members.length, configuredUserCount);
+  assert.equal(Date.now() - startedAt < 7_500, true);
+  assert.equal(
+    captured.body.members.every((member: any) =>
+      member.activity === null && member.warnings.length > 0
     ),
     true
   );

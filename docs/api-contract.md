@@ -75,6 +75,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | Endpoint | Query | Purpose | Response highlights |
 | --- | --- | --- | --- |
 | `/api/group` | optional `force=1`, `debug=1` | Full group dashboard payload. | `members`, `rankings.today|week|month`, each member's `profile`, `platform`, `catalogSummary`, `nowPlaying`, `recent`, `stats`, `tops`, and per-section `errors`. Debug includes Sao Paulo range anchors and sanitized upstream/cache details. |
+| `/api/group-activity` | none | Cached background fallback for the Circle Activity reel. | Fetches one row from each member's full `/streams` history with concurrency 3, hydrates track-only rows, and returns `members[].{key,userId,activity,generatedAt,warnings?}`. Responses may be partial under the endpoint deadline; `activity.isNow` is always `false`. |
 | `/api/group-live` | optional `force=1`, `debug=1`, `statsUser=<user>` | Lightweight Home/now-playing polling surface. | `ok`, `source`, `generatedAt`, and `members`. A valid `statsUser` adds optional `featuredStats`; calls without it remain backward compatible. |
 | `/api/user` | `user=<user>`, optional `force=1`, `debug=1` | One user profile summary. | `profile`, resolved `platform`, `legacy` upstream result, and sanitized `raw` only when `debug=1`. |
 | `/api/health` | none | Operational snapshot for agents and debugging. | `ok`, `service`, `time`, and `statsfm` cache/retry/metric snapshot. Cache/debug metadata belongs here, not in normal payloads. |

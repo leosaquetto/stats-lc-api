@@ -7,6 +7,7 @@ import entityListenersHandler from "../lib/api-handlers/entity-listeners.js";
 import entityStatsHandler from "../lib/api-handlers/entity-stats.js";
 import entityStreamsHandler from "../lib/api-handlers/entity-streams.js";
 import entityHandler from "../lib/api-handlers/entity.js";
+import groupActivityHandler from "../lib/api-handlers/group-activity.js";
 import groupLiveHandler from "../lib/api-handlers/group-live.js";
 import groupHandler from "../lib/api-handlers/group.js";
 import healthHandler from "../lib/api-handlers/health.js";
@@ -38,6 +39,7 @@ const ROUTES: Record<string, Handler> = {
   "entity-stats": entityStatsHandler,
   "entity-streams": entityStreamsHandler,
   entity: entityHandler,
+  "group-activity": groupActivityHandler,
   "group-live": groupLiveHandler,
   group: groupHandler,
   health: healthHandler,

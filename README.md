@@ -32,6 +32,8 @@ avulso como substituto do comando suportado pelo repo.
 
 - Manter payloads publicos retrocompativeis.
 - `/api/group-live?profile=0` e a superficie leve de polling.
+- `/api/group-activity` preenche a Atividade do Circulo com a ultima linha do
+  historico completo de cada membro, sem competir com o polling live.
 - `/api/group-live?statsUser=<usuario>` pode acrescentar `featuredStats` sem
   alterar chamadas antigas.
 - `/api/latest-discovery?user=<usuario>` so devolve uma descoberta quando a
