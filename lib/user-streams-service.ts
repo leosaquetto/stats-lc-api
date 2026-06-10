@@ -11,6 +11,7 @@ type StreamNormalizeOptions = FetchOptions & {
   after?: string | number | null;
   before?: string | number | null;
   useTrackStreamEvidence?: boolean;
+  trackStreamEvidenceStrategy?: "majority" | "latest";
 };
 
 export async function fetchUserStreams(

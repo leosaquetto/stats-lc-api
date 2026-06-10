@@ -33,6 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     force,
     userId,
     useTrackStreamEvidence: resolveAlbums,
+    trackStreamEvidenceStrategy: "latest",
     albumItems,
   });
 
