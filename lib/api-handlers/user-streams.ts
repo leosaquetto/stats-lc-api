@@ -6,6 +6,7 @@ import {
   setCacheHeaders,
 } from "../api-helpers.js";
 import { fetchUserStreams, normalizeStreamItems } from "../user-streams-service.js";
+import { fetchUserTop } from "../user-tops-service.js";
 import { resolveUserId } from "../users.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -38,6 +39,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // Fetch recent top albums to provide album context for track enrichment
+    const albumItems = resolveAlbums
+      ? await fetchUserTop(userId, "albums", params.after ? Number(params.after) : Date.now() - 30 * 24 * 60 * 60 * 1000, 50, { force: upstreamForce })
+          .then(r => r.ok ? (r.data as any)?.items || [] : [])
+      : [];
+
     setCacheHeaders(res, resolveAlbums ? 600 : 300, upstreamForce, resolveAlbums ? 3600 : 1800);
 
     return res.status(200).json({
@@ -49,6 +56,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         force: upstreamForce,
         userId,
         useTrackStreamEvidence: resolveAlbums,
+        trackStreamEvidenceStrategy: "latest",
+        albumItems,
       }),
     });
   } catch (error: any) {
