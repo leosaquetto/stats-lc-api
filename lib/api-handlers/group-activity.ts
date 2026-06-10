@@ -11,8 +11,8 @@ import { enrichTrackItemsWithAlbumOwners } from "../track-album-enrichment.js";
 import { fetchUserStreams } from "../user-streams-service.js";
 import { USERS } from "../users.js";
 
-const GROUP_ACTIVITY_DEADLINE_MS = 6800;
-const GROUP_ACTIVITY_REQUEST_TIMEOUT_MS = 2200;
+const GROUP_ACTIVITY_DEADLINE_MS = 10500;
+const GROUP_ACTIVITY_REQUEST_TIMEOUT_MS = 4500;
 const GROUP_ACTIVITY_CONCURRENCY = 3;
 
 type GroupUser = {

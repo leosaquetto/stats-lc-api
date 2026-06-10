@@ -486,7 +486,7 @@ test("group-activity hydrates track-only stream rows and keeps empty users parti
 });
 
 test("group-activity returns a partial response when upstream requests time out", {
-  timeout: 9_000,
+  timeout: 12_000,
 }, async () => {
   globalThis.fetch = () => new Promise<Response>((resolve) => {
     setTimeout(() => resolve(jsonResponse({ error: "slow_upstream" }, 503)), 2_000);
@@ -500,7 +500,7 @@ test("group-activity returns a partial response when upstream requests time out"
   assert.equal(captured.body.ok, true);
   assert.equal(captured.body.partial, true);
   assert.equal(captured.body.members.length, configuredUserCount);
-  assert.equal(Date.now() - startedAt < 7_500, true);
+  assert.equal(Date.now() - startedAt < 11_200, true);
   assert.equal(
     captured.body.members.every((member: any) =>
       member.activity === null && member.warnings.length > 0
