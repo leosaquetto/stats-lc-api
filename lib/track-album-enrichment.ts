@@ -25,6 +25,28 @@ function getTrackAlbum(track: any) {
   return track?.albums?.[0] ?? track?.album ?? null;
 }
 
+function canonicalText(value: unknown) {
+  return typeof value === "string"
+    ? value
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+    : "";
+}
+
+function canonicalTrackTitle(value: unknown) {
+  const text = typeof value === "string"
+    ? value
+        .replace(/\s*[\(\[]\s*(?:from|feat|ft|with)\b[\s\S]*[\)\]]\s*$/i, "")
+        .replace(/\s+[-–—]\s+(?:from|feat|ft|with)\b.*$/i, "")
+    : value;
+  return canonicalText(text);
+}
+
 function getAppleMusicId(track: any) {
   const directId = readText(track?.appleMusicId);
   if (directId) return directId;
@@ -115,6 +137,48 @@ function albumValue(item: any) {
 function albumForTrackReplacement(item: any) {
   const album = albumValue(item);
   return album && typeof album === "object" ? album : null;
+}
+
+function getArtistName(artist: any) {
+  return typeof artist === "string" ? artist : readText(artist?.name ?? artist?.artistName);
+}
+
+function getAlbumArtistName(album: any) {
+  return readText(album?.artistName) ||
+    readText(album?.primaryArtistName) ||
+    getArtistName(album?.artist) ||
+    getArtistName(album?.primaryArtist) ||
+    getArtistName(Array.isArray(album?.artists) ? album.artists[0] : null);
+}
+
+function getTrackArtistNames(track: any) {
+  const names = [
+    readText(track?.primaryArtistName),
+    readText(track?.artistName),
+    getArtistName(track?.primaryArtist),
+    getArtistName(track?.artist),
+    ...(Array.isArray(track?.artists) ? track.artists.map(getArtistName) : []),
+  ];
+  return [...new Set(names.filter(Boolean).map((name) => canonicalText(name)))];
+}
+
+function sameArtistContext(track: any, album: any) {
+  const albumArtist = canonicalText(getAlbumArtistName(album));
+  if (!albumArtist) return false;
+  return getTrackArtistNames(track).includes(albumArtist);
+}
+
+function isSingleLikeAlbum(album: any) {
+  const type = canonicalText(album?.type);
+  const totalTracks = Number(album?.totalTracks ?? album?.total_tracks);
+  return type === "single" || totalTracks === 1;
+}
+
+function isAlbumLikeContext(album: any) {
+  if (!album || typeof album !== "object" || !albumIdForDetail(album)) return false;
+  const type = canonicalText(album?.type);
+  const totalTracks = Number(album?.totalTracks ?? album?.total_tracks);
+  return type === "album" || totalTracks > 1;
 }
 
 function mergeAlbumIntoTrackItem<T>(item: T, album: any): T {
@@ -229,6 +293,78 @@ async function enrichTracksWithAppleMusicOwners<T>(
     const appleMusicId = getAppleMusicId(getTrackValue(item));
     const artistName = appleMusicId ? evidenceByAppleMusicId.get(appleMusicId) : null;
     return artistName ? mergeAppleMusicAlbumOwner(item, artistName) : item;
+  });
+}
+
+async function fetchAlbumTrackTitleKeys(albumId: string, options: FetchOptions) {
+  const result = await statsfmFetch(`/albums/${encodeSegment(albumId)}/tracks?limit=100`, {
+    force: options.force,
+    cacheProfile: options.cacheProfile,
+    requestTimeoutMs: Math.min(options.requestTimeoutMs ?? 1000, 1000),
+  });
+
+  if (!result.ok) return new Set<string>();
+
+  const keys = new Set<string>();
+  for (const item of Array.isArray((result.data as any)?.items) ? (result.data as any).items : []) {
+    const track = getTrackValue(item);
+    const key = canonicalTrackTitle(track?.name);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+async function enrichSingleTracksWithRecentAlbumContext<T>(
+  items: T[],
+  options: FetchOptions
+): Promise<T[]> {
+  const sourceItems = Array.isArray(items) ? items : [];
+  const contextAlbums = sourceItems
+    .map((item: any) => getTrackAlbum(getTrackValue(item)))
+    .filter(isAlbumLikeContext);
+
+  if (contextAlbums.length === 0) return sourceItems;
+
+  const contextAlbumById = new Map<string, any>();
+  for (const album of contextAlbums) {
+    const id = albumIdForDetail(album);
+    if (id && !contextAlbumById.has(id)) contextAlbumById.set(id, album);
+  }
+
+  const singleCandidates = sourceItems.filter((item: any) => {
+    const track = getTrackValue(item);
+    const album = getTrackAlbum(track);
+    return Boolean(track && album && isSingleLikeAlbum(album) && canonicalTrackTitle(track?.name));
+  });
+
+  if (singleCandidates.length === 0) return sourceItems;
+
+  const albumIds = [...contextAlbumById.keys()].slice(0, 4);
+  const trackKeysByAlbumId = new Map<string, Set<string>>();
+  await mapWithConcurrency(albumIds, 2, async (albumId) => {
+    trackKeysByAlbumId.set(albumId, await fetchAlbumTrackTitleKeys(albumId, options));
+  });
+
+  if (trackKeysByAlbumId.size === 0) return sourceItems;
+
+  return sourceItems.map((item: any) => {
+    const track = getTrackValue(item);
+    const album = getTrackAlbum(track);
+    if (!track || !album || !isSingleLikeAlbum(album)) return item;
+
+    const titleKey = canonicalTrackTitle(track?.name);
+    if (!titleKey) return item;
+
+    const matchedAlbum = albumIds
+      .map((albumId) => contextAlbumById.get(albumId))
+      .find((candidateAlbum) => {
+        const albumId = albumIdForDetail(candidateAlbum);
+        return albumId &&
+          sameArtistContext(track, candidateAlbum) &&
+          trackKeysByAlbumId.get(albumId)?.has(titleKey);
+      });
+
+    return matchedAlbum ? mergeAlbumIntoTrackItem(item, matchedAlbum) : item;
   });
 }
 
@@ -501,7 +637,8 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
     ? enrichTopTracksWithAlbumOwners(streamEnriched, options.albumItems)
     : streamEnriched;
 
-  const appleMusicEnriched = await enrichTracksWithAppleMusicOwners(lookupEnriched as T[], options);
+  const contextEnriched = await enrichSingleTracksWithRecentAlbumContext(lookupEnriched as T[], options);
+  const appleMusicEnriched = await enrichTracksWithAppleMusicOwners(contextEnriched as T[], options);
 
   const albumIds = [
     ...new Set(

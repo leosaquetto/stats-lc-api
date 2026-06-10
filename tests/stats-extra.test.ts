@@ -969,6 +969,72 @@ test("multi-artist tracks can use Apple Music artistName when album owner is mis
   assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/album-ownerless")), false);
 });
 
+test("recent album context can replace a soundtrack single with the album version", async () => {
+  const urls: URL[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    urls.push(url);
+
+    if (url.pathname.endsWith("/albums/sanctuary/tracks")) {
+      return jsonResponse({
+        items: [
+          { track: { id: "afterlife-album-track", name: "Afterlife" } },
+          { track: { id: "calm-down", name: "Calm Down" } },
+        ],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [afterlifeItem, calmDownItem] = await enrichTrackItemsWithAlbumOwners([
+    {
+      track: {
+        id: "afterlife-single-track",
+        name: "Afterlife (from the Netflix Series \"Devil May Cry\")",
+        artists: [{ id: "evanescence", name: "Evanescence" }],
+        albums: [
+          {
+            id: "single-afterlife",
+            name: "Afterlife (from the Netflix Series \"Devil May Cry\")",
+            type: "single",
+            totalTracks: 1,
+            image: "https://img.test/single.jpg",
+            artists: [{ id: "evanescence", name: "Evanescence" }],
+          },
+        ],
+      },
+    },
+    {
+      track: {
+        id: "calm-down-track",
+        name: "Calm Down",
+        artists: [{ id: "evanescence", name: "Evanescence" }],
+        albums: [
+          {
+            id: "sanctuary",
+            name: "Sanctuary",
+            type: "album",
+            totalTracks: 12,
+            image: "https://img.test/sanctuary.jpg",
+            artists: [{ id: "evanescence", name: "Evanescence" }],
+          },
+        ],
+      },
+    },
+  ], {
+    useTrackStreamEvidence: false,
+  });
+
+  const afterlifeTrack: any = normalizeTopItem(afterlifeItem, "tracks");
+  const calmDownTrack: any = normalizeTopItem(calmDownItem, "tracks");
+  assert.equal(afterlifeTrack.albumId, "sanctuary");
+  assert.equal(afterlifeTrack.albumName, "Sanctuary");
+  assert.equal(afterlifeTrack.albumImage, "https://img.test/sanctuary.jpg");
+  assert.equal(calmDownTrack.albumId, "sanctuary");
+  assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/sanctuary/tracks")), true);
+});
+
 test("ownerless albums infer primary artist from album tracks", async () => {
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));
