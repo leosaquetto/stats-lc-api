@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { resolveUserId } from "../users.js";
 import { fetchUserRecentStreams, normalizeStreamItems } from "../user-streams-service.js";
 import { attachDominantColorToItems } from "../artwork-color.js";
+import { fetchUserTop } from "../user-tops-service.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const user = String(req.query.user || "");
@@ -22,10 +23,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(result.status).json(result);
   }
 
+  // Fetch recent top albums to provide album context for track enrichment
+  const albumItems = resolveAlbums
+    ? await fetchUserTop(userId, "albums", Date.now() - 30 * 24 * 60 * 60 * 1000, 50, { force })
+        .then(r => r.ok ? (r.data as any)?.items || [] : [])
+    : [];
+
   const items = await normalizeStreamItems(result.data, {
     force,
     userId,
     useTrackStreamEvidence: resolveAlbums,
+    albumItems,
   });
 
   res.status(200).json({
