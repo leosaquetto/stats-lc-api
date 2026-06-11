@@ -29,39 +29,11 @@ type EntityKind = keyof typeof routeMap;
 type CountRow = {
   key: string;
   id: string;
-  count: number;
-  durationMs: number;
-  minutes: number;
+  count: number | null;
+  durationMs: number | null;
+  minutes: number | null;
   error?: unknown;
 };
-
-function getEmptyGroupRows(): CountRow[] {
-  return (Object.entries(USERS) as Array<[string, { id: string }]>).map(([key, user]) => ({
-    key,
-    id: user.id,
-    count: 0,
-    durationMs: 0,
-    minutes: 0,
-    error: "timeout",
-  }));
-}
-
-async function withTimedFallback<T>(promise: Promise<T>, timeoutMs: number, fallback: T) {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  let timedOut = false;
-  try {
-    const timeoutPromise = new Promise<T>((resolve) => {
-      timeoutId = setTimeout(() => {
-        timedOut = true;
-        resolve(fallback);
-      }, timeoutMs);
-    });
-    const data = await Promise.race([promise.catch(() => fallback), timeoutPromise]);
-    return { data, timedOut };
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-}
 
 function splitCsv(value: string | null) {
   if (!value) return [];
@@ -130,7 +102,7 @@ async function getEntityStatsForUser(
   deadline: number
 ): Promise<CountRow> {
   if (!id || Date.now() >= deadline) {
-    return { key, id: userId, count: 0, durationMs: 0, minutes: 0, error: "deadline" };
+    return { key, id: userId, count: null, durationMs: null, minutes: null, error: "deadline" };
   }
 
   const result = await statsfmFetch(
@@ -146,9 +118,9 @@ async function getEntityStatsForUser(
     return {
       key,
       id: userId,
-      count: 0,
-      durationMs: 0,
-      minutes: 0,
+      count: null,
+      durationMs: null,
+      minutes: null,
       error: {
         ok: result.ok,
         status: result.status,
@@ -167,8 +139,12 @@ async function getEntityStatsForUser(
   };
 }
 
-async function getEntityStatsForGroup(type: EntityKind, id: string, deadline: number) {
-  const users = Object.entries(USERS) as Array<[string, { id: string }]>;
+async function getEntityStatsForGroup(
+  type: EntityKind,
+  id: string,
+  deadline: number,
+  users = Object.entries(USERS) as Array<[string, { id: string }]>
+) {
   const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
     getEntityStatsForUser(key, user.id, type, id, deadline)
   );
@@ -179,9 +155,9 @@ async function getEntityStatsForGroup(type: EntityKind, id: string, deadline: nu
     return {
       key,
       id: user.id,
-      count: 0,
-      durationMs: 0,
-      minutes: 0,
+      count: null,
+      durationMs: null,
+      minutes: null,
       error: String(result.reason),
     };
   });
@@ -250,9 +226,9 @@ async function getFirstPlayedForUser(key: string, userId: string, trackId: strin
 }
 
 async function getFirstListeners(trackId: string, counts: CountRow[], deadline: number) {
-  const users = Object.entries(USERS) as Array<[string, { id: string }]>;
-  const settled = await mapWithConcurrency(users, 3, ([key, user]) =>
-    getFirstPlayedForUser(key, user.id, trackId, deadline)
+  const listenersToCheck = counts.filter((row) => typeof row.count === "number" && row.count > 0);
+  const settled = await mapWithConcurrency(listenersToCheck, 3, (row) =>
+    getFirstPlayedForUser(row.key, row.id, trackId, deadline)
   );
   const countById = new Map(counts.map((row) => [row.id, row.count]));
   let partial = false;
@@ -260,8 +236,8 @@ async function getFirstListeners(trackId: string, counts: CountRow[], deadline: 
     .map((result, index) => {
       if (result.status !== "fulfilled") {
         partial = true;
-        const [key, user] = users[index];
-        return { key, id: user.id, playedAt: 0, count: countById.get(user.id) || 0 };
+        const row = listenersToCheck[index];
+        return { key: row.key, id: row.id, playedAt: 0, count: countById.get(row.id) || 0 };
       }
       if (result.value.error) partial = true;
       return {
@@ -277,7 +253,7 @@ async function getFirstListeners(trackId: string, counts: CountRow[], deadline: 
   return { listeners, partial };
 }
 
-function summarizeHistory(items: any[], totalCount: number) {
+function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
   const times = items
     .map(readTime)
     .filter((time) => time > 0)
@@ -358,7 +334,7 @@ function summarizeHistory(items: any[], totalCount: number) {
     firstPlayedAt: firstPlayedAt ? new Date(firstPlayedAt).toISOString() : null,
     lastPlayedAt: lastPlayedAt ? new Date(lastPlayedAt).toISOString() : null,
     bestYear,
-    advanced: playedCount > 10
+    advanced: complete && playedCount > 10
       ? {
           streak,
           loopFactor: loopEntry ? { day: loopEntry[0], count: loopEntry[1] } : null,
@@ -393,9 +369,9 @@ async function getTop1kPosition(userId: string, trackId: string, deadline: numbe
   });
   if (!result.ok) return { position: null as number | null, partial: true };
   const items = getItems(result.data).map((item: any) => normalizeTopItem(item, "tracks")).filter(Boolean);
-  const match = items.find((item: any, index: number) => {
+  const match = items.find((item: any) => {
     const id = item?.id == null ? "" : String(item.id);
-    return id === trackId || String(item?.trackId || "") === trackId || item?.position === trackId || index === -1;
+    return id === trackId || String(item?.trackId || "") === trackId;
   }) as any;
   return { position: match ? Number(match.position || items.indexOf(match) + 1) : null, partial: false };
 }
@@ -417,67 +393,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = resolveUserId(user);
   const deadline = Date.now() + DEADLINE_MS;
-  const emptyArtistCounts = artistIds.map((artistId) => ({
-    key: user,
-    id: userId,
-    count: 0,
-    durationMs: 0,
-    minutes: 0,
-    artistId,
-    error: "timeout",
-  }));
-  const [trackCountsResult, albumCountResult, artistCountsResult, ownHistoryResult] = await Promise.all([
-    withTimedFallback(getEntityStatsForGroup("track", trackId, deadline), 2600, getEmptyGroupRows()),
-    albumId
-      ? withTimedFallback(getEntityStatsForUser(user, userId, "album", albumId, deadline), 1500, null)
-      : Promise.resolve({ data: null, timedOut: false }),
-    withTimedFallback(
-      Promise.all(artistIds.map((artistId) => getEntityStatsForUser(user, userId, "artist", artistId, deadline))),
-      1800,
-      emptyArtistCounts
-    ),
-    withTimedFallback(
-      fetchOwnTrackHistory(userId, trackId, 0, deadline),
-      3200,
-      { items: [], fetchedPages: 0, partial: true }
-    ),
-  ]);
+  const configuredUsers = Object.entries(USERS) as Array<[string, { id: string }]>;
+  const ownKey = configuredUsers.find(([, configuredUser]) => configuredUser.id === userId)?.[0] || user;
+  const friendUsers = configuredUsers.filter(([, configuredUser]) => configuredUser.id !== userId);
 
-  const trackCounts = trackCountsResult.data;
-  const albumCount = albumCountResult.data;
-  const artistCounts = artistCountsResult.data;
-  const ownHistory = ownHistoryResult.data;
-  const ownTrackCountFromStats = trackCounts.find((row) => row.id === userId)?.count || 0;
-  const ownTrackCount = ownTrackCountFromStats || ownHistory.items.length;
-  const history = summarizeHistory(ownHistory.items, ownTrackCount);
-  const firstListenersTimed = await withTimedFallback(
-    getFirstListeners(trackId, trackCounts, deadline),
-    2400,
-    { listeners: [], partial: true }
+  // Own count/history are the modal's primary proof. Start the remaining work in
+  // parallel, but never let optional social fanout erase completed own results.
+  const ownTrackCountPromise = getEntityStatsForUser(ownKey, userId, "track", trackId, deadline);
+  const ownHistoryPromise = fetchOwnTrackHistory(userId, trackId, 0, deadline);
+  const albumCountPromise = albumId
+    ? getEntityStatsForUser(ownKey, userId, "album", albumId, deadline)
+    : Promise.resolve(null);
+  const artistCountsPromise = Promise.all(
+    artistIds.map((artistId) => getEntityStatsForUser(ownKey, userId, "artist", artistId, deadline))
   );
-  const firstListenersResult = firstListenersTimed.data;
+  const friendTrackCountsPromise = getEntityStatsForGroup("track", trackId, deadline, friendUsers);
+  const top1kPromise = getTop1kPosition(userId, trackId, deadline);
+
+  const [ownTrackStats, ownHistory] = await Promise.all([ownTrackCountPromise, ownHistoryPromise]);
+  const historyComplete = !ownHistory.partial;
+  const ownTrackCount = typeof ownTrackStats.count === "number"
+    ? ownTrackStats.count
+    : historyComplete
+      ? ownHistory.items.length
+      : null;
+  const ownTrackRow: CountRow = {
+    ...ownTrackStats,
+    count: ownTrackCount,
+  };
+  const history = summarizeHistory(ownHistory.items, ownTrackCount ?? ownHistory.items.length, historyComplete);
+
+  const [albumCount, artistCounts, friendTrackCounts] = await Promise.all([
+    albumCountPromise,
+    artistCountsPromise,
+    friendTrackCountsPromise,
+  ]);
+  const trackCounts = [ownTrackRow, ...friendTrackCounts];
+  const trackCountsComplete = trackCounts.every((row) => typeof row.count === "number");
+  const firstListenersResult = await getFirstListeners(trackId, trackCounts, deadline);
   const ranking = trackCounts
-    .filter((row) => row.count > 0)
+    .filter((row): row is CountRow & { count: number } => typeof row.count === "number" && row.count > 0)
     .sort((a, b) => b.count - a.count)
     .map((row, index) => ({
       key: row.key,
       id: row.id,
       count: row.count,
-      durationMs: row.durationMs,
-      minutes: row.minutes,
+      durationMs: row.durationMs ?? 0,
+      minutes: row.minutes ?? 0,
       position: index + 1,
     }));
 
   let topPartial = false;
   if (history.advanced) {
-    const top1kTimed = await withTimedFallback(
-      getTop1kPosition(userId, trackId, deadline),
-      1400,
-      { position: null as number | null, partial: true }
-    );
-    const top1k = top1kTimed.data;
+    const top1k = await top1kPromise;
     history.advanced.top1kPosition = top1k.position;
-    topPartial = top1k.partial || top1kTimed.timedOut;
+    topPartial = top1k.partial;
   }
 
   const releaseListeners = releaseKey
@@ -485,43 +455,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     : [];
   const ownFirst = firstListenersResult.listeners.find((listener) => listener.id === userId);
   const ownFirstPlayedAt = ownFirst?.playedAt || (history.firstPlayedAt ? new Date(history.firstPlayedAt).getTime() : 0);
-  const heardOnRelease = isReleaseWindow(ownFirstPlayedAt, releaseKey);
+  const heardOnRelease = historyComplete && isReleaseWindow(ownFirstPlayedAt, releaseKey);
   const firstPlayedAt = firstListenersResult.listeners[0]?.playedAt || 0;
-  const heardFirst = !!ownFirstPlayedAt && !!firstPlayedAt && ownFirstPlayedAt === firstPlayedAt;
+  const socialPartial = !trackCountsComplete || firstListenersResult.partial;
+  const heardFirst = !socialPartial && !!ownFirstPlayedAt && !!firstPlayedAt && ownFirstPlayedAt === firstPlayedAt;
   const totalCirclePlays = ranking.reduce((sum, row) => sum + row.count, 0);
   const friendsWithAnyPlay = ranking.filter((row) => row.id !== userId && row.count > 0);
   const overTenListeners = ranking.filter((row) => row.count > 10);
   const ownRanking = ranking.find((row) => row.id === userId);
   const specialCards: Array<ReturnType<typeof makeSpecialCard>> = [];
 
-  if (heardOnRelease) {
+  if (historyComplete && heardOnRelease) {
     specialCards.push(makeSpecialCard("shiny", "SHINY SONG", "shine", "Ouvida no lançamento ou na véspera.", history.firstPlayedAt));
   }
-  if (ownTrackCount > 10 && friendsWithAnyPlay.length === 0) {
+  if (trackCountsComplete && ownTrackCount != null && ownTrackCount > 10 && friendsWithAnyPlay.length === 0) {
     specialCards.push(makeSpecialCard("treasure", "TREASURE SONG", "treasure", "Mais de 10 plays só seus no círculo.", ownTrackCount));
   }
-  if (history.specialSignals.seasonalMonth) {
+  if (historyComplete && history.specialSignals.seasonalMonth) {
     specialCards.push(makeSpecialCard("seasonal", "SAZONAL SONG", "seasonal", "Todos os plays caem no mesmo mês.", history.specialSignals.seasonalMonth));
   }
-  if (ownTrackCount > 10 && overTenListeners.length === 2 && overTenListeners.some((row) => row.id === userId)) {
-    specialCards.push(makeSpecialCard("special", "SPECIAL SONG", "special", "Só você e mais um amigo passaram de 10 plays.", overTenListeners[1]?.count));
+  if (trackCountsComplete && ownTrackCount != null && ownTrackCount > 10 && overTenListeners.length === 2 && overTenListeners.some((row) => row.id === userId)) {
+    const friendOverTen = overTenListeners.find((row) => row.id !== userId);
+    specialCards.push(makeSpecialCard("special", "SPECIAL SONG", "special", "Só você e mais um amigo passaram de 10 plays.", friendOverTen?.count));
   }
-  if (history.specialSignals.maxGapDays > 365) {
+  if (historyComplete && history.specialSignals.maxGapDays > 365) {
     specialCards.push(makeSpecialCard("late", "THE LATE SONG", "late", "Voltou depois de mais de 1 ano sem tocar.", history.specialSignals.maxGapDays));
   }
 
   let jealousSignal: any = null;
-  if (ownTrackCount >= 50 && artistIds.length > 0) {
-    for (const artistId of artistIds) {
-      const artistGroupTimed = await withTimedFallback(
-        getEntityStatsForGroup("artist", artistId, deadline),
-        1800,
-        getEmptyGroupRows()
-      );
-      const artistGroup = artistGroupTimed.data;
-      const ownArtistCount = artistGroup.find((row) => row.id === userId)?.count || 0;
+  if (ownTrackCount != null && ownTrackCount >= 50 && artistIds.length > 0) {
+    for (const [index, artistId] of artistIds.entries()) {
+      const ownArtistCount = artistCounts[index]?.count;
+      if (typeof ownArtistCount !== "number") continue;
+      const artistGroup = await getEntityStatsForGroup("artist", artistId, deadline, friendUsers);
       const rival = artistGroup
-        .filter((row) => row.id !== userId && row.count > ownArtistCount)
+        .filter((row): row is CountRow & { count: number } => typeof row.count === "number" && row.count > ownArtistCount)
         .sort((a, b) => b.count - a.count)[0];
       if (rival) {
         jealousSignal = { artistId, ownCount: ownArtistCount, rival };
@@ -534,18 +502,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     specialCards.push(makeSpecialCard("jealous", "JEALOUS SONG", "jealous", "Você domina a faixa, mas um amigo domina um artista dela.", jealousSignal.rival.count));
   }
 
+  const trackCountProven = typeof ownTrackCount === "number";
+  const albumCountProven = !albumId || typeof albumCount?.count === "number";
+  const artistCoverage = Object.fromEntries(
+    artistIds.map((artistId, index) => [artistId, typeof artistCounts[index]?.count === "number"])
+  );
+  const artistCountsProven = Object.values(artistCoverage).every(Boolean);
+  const countsPartial = !trackCountProven || !albumCountProven || !artistCountsProven;
   const partial =
-    trackCountsResult.timedOut ||
-    albumCountResult.timedOut ||
-    artistCountsResult.timedOut ||
-    ownHistoryResult.timedOut ||
-    ownHistory.partial ||
-    firstListenersTimed.timedOut ||
-    firstListenersResult.partial ||
+    countsPartial ||
+    !historyComplete ||
+    socialPartial ||
     topPartial ||
     Date.now() >= deadline;
 
-  setCacheHeaders(res, 300, false, 1800);
+  setCacheHeaders(res, partial ? 0 : 300, partial, 1800);
   return res.status(200).json({
     ok: true,
     user,
@@ -556,34 +527,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     generatedAt: new Date().toISOString(),
     counts: {
       track: ownTrackCount,
-      album: albumCount?.count || 0,
+      album: albumId && typeof albumCount?.count === "number" ? albumCount.count : null,
       artists: artistIds.map((artistId, index) => ({
         id: artistId,
-        count: artistCounts[index]?.count || 0,
-        durationMs: artistCounts[index]?.durationMs || 0,
+        count: typeof artistCounts[index]?.count === "number" ? artistCounts[index].count : null,
+        durationMs: artistCounts[index]?.durationMs ?? null,
       })),
     },
     history: {
-      count: history.count,
-      firstPlayedAt: history.firstPlayedAt,
-      lastPlayedAt: history.lastPlayedAt,
-      bestYear: history.bestYear,
+      count: ownTrackCount ?? history.count,
+      firstPlayedAt: historyComplete ? history.firstPlayedAt : null,
+      lastPlayedAt: historyComplete ? history.lastPlayedAt : null,
+      bestYear: historyComplete ? history.bestYear : null,
     },
-    advanced: history.advanced,
+    advanced: historyComplete ? history.advanced : null,
     social: {
       firstListeners: firstListenersResult.listeners,
       releaseListeners,
       ranking,
       ownPosition: ownRanking?.position || null,
-      cakePiecePercent: totalCirclePlays > 0 ? Math.round((ownTrackCount / totalCirclePlays) * 100) : 0,
+      cakePiecePercent: trackCountsComplete && ownTrackCount != null && totalCirclePlays > 0
+        ? Math.round((ownTrackCount / totalCirclePlays) * 100)
+        : null,
       heardOnRelease,
       heardFirst,
     },
     specialCards,
     coverage: {
       partial,
-      historyPartial: ownHistory.partial || ownHistoryResult.timedOut,
-      socialPartial: firstListenersResult.partial || firstListenersTimed.timedOut,
+      counts: {
+        track: trackCountProven,
+        album: albumCountProven,
+        artists: artistCoverage,
+      },
+      historyPartial: !historyComplete,
+      socialPartial,
       topPartial,
       fetchedHistoryPages: ownHistory.fetchedPages,
       maxHistoryPages: MAX_HISTORY_PAGES,

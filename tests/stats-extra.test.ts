@@ -833,10 +833,154 @@ test("track-story returns advanced history, social ranking, and special cards", 
   assert.equal(captured.body.advanced.top1kPosition, 9);
   assert.equal(captured.body.social.cakePiecePercent, 100);
   assert.equal(captured.body.social.heardOnRelease, true);
+  assert.equal(captured.body.coverage.partial, false);
+  assert.deepEqual(captured.body.coverage.counts, {
+    track: true,
+    album: true,
+    artists: { "artist-1": true },
+  });
+  assert.match(captured.headers["cache-control"], /s-maxage=300/);
   assert.deepEqual(
     captured.body.specialCards.map((card: any) => card.code).sort(),
     ["late", "seasonal", "shiny", "treasure"]
   );
+});
+
+test("track-story keeps unproven cold-path counts null and does not cache partial proof", async () => {
+  globalThis.fetch = async () => jsonResponse({ error: "upstream_timeout" }, 503);
+
+  const { res, captured } = createResponseCapture();
+  await trackStoryHandler({
+    query: {
+      user: "leo",
+      track: "cold-track",
+      album: "cold-album",
+      artists: "cold-artist",
+      releaseDate: "2026-06-01",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.counts.track, null);
+  assert.equal(captured.body.counts.album, null);
+  assert.equal(captured.body.counts.artists[0].count, null);
+  assert.deepEqual(captured.body.coverage.counts, {
+    track: false,
+    album: false,
+    artists: { "cold-artist": false },
+  });
+  assert.equal(captured.body.coverage.partial, true);
+  assert.equal(captured.body.advanced, null);
+  assert.deepEqual(captured.body.specialCards, []);
+  assert.equal(captured.headers["cache-control"], "no-store");
+});
+
+test("track-story proves low-play multi-artist counts and ranking without advanced metrics", async () => {
+  const ownUserId = USERS.leo.id;
+  const friendUserId = Object.values(USERS).find((item) => item.id !== ownUserId)!.id;
+  const ownHistory = [
+    "2026-01-01T10:00:00.000Z",
+    "2026-02-01T10:00:00.000Z",
+    "2026-03-01T10:00:00.000Z",
+  ].map((endTime) => ({ endTime, track: { id: "multi-track", name: "Multi Track" } }));
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    const path = decodeURIComponent(url.pathname);
+
+    if (path.endsWith("/streams/tracks/multi-track/stats")) {
+      const count = path.includes(ownUserId) ? 3 : path.includes(friendUserId) ? 1 : 0;
+      return jsonResponse({ items: { count, durationMs: count * 180000 } });
+    }
+    if (path.endsWith("/streams/albums/multi-album/stats")) {
+      return jsonResponse({ items: { count: 2, durationMs: 360000 } });
+    }
+    if (path.endsWith("/streams/artists/artist-a/stats")) {
+      return jsonResponse({ items: { count: 20, durationMs: 3600000 } });
+    }
+    if (path.endsWith("/streams/artists/artist-b/stats")) {
+      return jsonResponse({ items: { count: 8, durationMs: 1440000 } });
+    }
+    if (path.includes("/streams/tracks/multi-track")) {
+      if (path.includes(ownUserId)) {
+        return jsonResponse({ items: url.searchParams.get("order") === "asc" ? [ownHistory[0]] : ownHistory });
+      }
+      if (path.includes(friendUserId)) {
+        return jsonResponse({ items: [{ endTime: "2026-01-02T10:00:00.000Z", track: { id: "multi-track" } }] });
+      }
+      return jsonResponse({ items: [] });
+    }
+    if (path.endsWith("/top/tracks")) return jsonResponse({ items: [] });
+    return jsonResponse({ items: [] });
+  };
+
+  const { res, captured } = createResponseCapture();
+  await trackStoryHandler({
+    query: {
+      user: "leo",
+      track: "multi-track",
+      album: "multi-album",
+      artists: "artist-a,artist-b",
+    },
+  } as any, res);
+
+  assert.equal(captured.body.counts.track, 3);
+  assert.deepEqual(captured.body.counts.artists.map((item: any) => item.count), [20, 8]);
+  assert.equal(captured.body.advanced, null);
+  assert.deepEqual(captured.body.social.ranking.map((item: any) => item.count), [3, 1]);
+  assert.equal(captured.body.coverage.partial, false);
+  assert.match(captured.headers["cache-control"], /s-maxage=300/);
+});
+
+test("track-story emits special and jealous only from positively proven counts", async () => {
+  const ownUserId = USERS.leo.id;
+  const friendUserId = Object.values(USERS).find((item) => item.id !== ownUserId)!.id;
+  const ownHistory = Array.from({ length: 55 }, (_, index) => ({
+    endTime: new Date(Date.UTC(2026, 0, 1 + index, 12, 0, 0)).toISOString(),
+    track: { id: "rival-track", name: "Rival Track" },
+  }));
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    const path = decodeURIComponent(url.pathname);
+
+    if (path.endsWith("/streams/tracks/rival-track/stats")) {
+      const count = path.includes(ownUserId) ? 55 : path.includes(friendUserId) ? 11 : 0;
+      return jsonResponse({ items: { count, durationMs: count * 180000 } });
+    }
+    if (path.endsWith("/streams/artists/rival-artist/stats")) {
+      const count = path.includes(ownUserId) ? 100 : path.includes(friendUserId) ? 200 : 0;
+      return jsonResponse({ items: { count, durationMs: count * 180000 } });
+    }
+    if (path.includes("/streams/tracks/rival-track")) {
+      if (path.includes(ownUserId)) {
+        return jsonResponse({ items: url.searchParams.get("order") === "asc" ? [ownHistory[0]] : ownHistory });
+      }
+      if (path.includes(friendUserId)) {
+        return jsonResponse({ items: [{ endTime: "2026-01-02T12:00:00.000Z", track: { id: "rival-track" } }] });
+      }
+      return jsonResponse({ items: [] });
+    }
+    if (path.endsWith("/top/tracks")) {
+      return jsonResponse({ items: [{ track: { id: "rival-track" }, streams: 55, position: 10 }] });
+    }
+    return jsonResponse({ items: [] });
+  };
+
+  const { res, captured } = createResponseCapture();
+  await trackStoryHandler({
+    query: {
+      user: "leo",
+      track: "rival-track",
+      artists: "rival-artist",
+    },
+  } as any, res);
+
+  assert.deepEqual(
+    captured.body.specialCards.map((card: any) => card.code).sort(),
+    ["jealous", "special"]
+  );
+  assert.equal(captured.body.coverage.partial, false);
 });
 
 test("normalizeTrack exposes album-owned primary artist and secondary artists", () => {
