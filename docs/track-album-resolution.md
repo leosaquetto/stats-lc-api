@@ -22,7 +22,8 @@ The correct album evidence order is:
 2. `/users/:userId/streams/tracks/:trackId` evidence for the requested user/range.
 3. `/users/:userId/streams/albums/:albumId` evidence from candidate albums in the same user/range.
 4. Existing album detail/owner enrichment.
-5. Public catalog album as fallback only.
+5. Album track-list catalog evidence from `/albums/:albumId/tracks`, matched by track ID, Spotify/Apple Music ID, then canonical title.
+6. Public track catalog album as fallback only.
 
 Once the real album is found, apply it before normalization so `albumId`, `albumName`, `album.artistName`, `album.primaryArtistName`, `primaryArtistName`, and secondary artist selection all derive from the corrected album.
 
@@ -70,6 +71,7 @@ Known examples that motivated this rule:
 
 - Track `355354351` / "Choka Choka" can be assigned to a single publicly, but user history can place it under album `66372189` / `EQUILIBRIVM`.
 - Track `1293521` / "Lucky" can be assigned to a video/single publicly, but user history can place it under album `55979903` / `Oops!... I Did It Again (25th Anniversary Edition)`.
+- Track `315834932` / "Afterlife" can appear as soundtrack/single metadata publicly, but the album track list for `66177205` / `Sanctuary` proves the album-owned catalog row.
 
 The exact IDs may change with upstream data, but the rule must remain: user stream album evidence wins over public track catalog metadata.
 

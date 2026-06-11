@@ -978,7 +978,18 @@ test("recent album context can replace a soundtrack single with the album versio
     if (url.pathname.endsWith("/albums/sanctuary/tracks")) {
       return jsonResponse({
         items: [
-          { track: { id: "afterlife-album-track", name: "Afterlife" } },
+          {
+            track: {
+              id: "afterlife-album-track",
+              name: "Afterlife",
+              externalIds: { appleMusic: ["1891104596"] },
+              albums: [{
+                id: "66177205",
+                name: "Sanctuary",
+                image: "https://img.test/sanctuary-catalog.jpg",
+              }],
+            },
+          },
           { track: { id: "calm-down", name: "Calm Down" } },
         ],
       });
@@ -993,6 +1004,7 @@ test("recent album context can replace a soundtrack single with the album versio
         id: "afterlife-single-track",
         name: "Afterlife (from the Netflix Series \"Devil May Cry\")",
         artists: [{ id: "evanescence", name: "Evanescence" }],
+        externalIds: { appleMusic: ["1891104596"] },
         albums: [
           {
             id: "single-afterlife",
@@ -1028,11 +1040,71 @@ test("recent album context can replace a soundtrack single with the album versio
 
   const afterlifeTrack: any = normalizeTopItem(afterlifeItem, "tracks");
   const calmDownTrack: any = normalizeTopItem(calmDownItem, "tracks");
-  assert.equal(afterlifeTrack.albumId, "sanctuary");
+  assert.equal(afterlifeTrack.id, "afterlife-album-track");
+  assert.equal(afterlifeTrack.albumId, "66177205");
   assert.equal(afterlifeTrack.albumName, "Sanctuary");
-  assert.equal(afterlifeTrack.albumImage, "https://img.test/sanctuary.jpg");
+  assert.equal(afterlifeTrack.albumImage, "https://img.test/sanctuary-catalog.jpg");
   assert.equal(calmDownTrack.albumId, "sanctuary");
   assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/sanctuary/tracks")), true);
+});
+
+test("recent album context can fall back to canonical title when catalog ids are missing", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.pathname.endsWith("/albums/sanctuary/tracks")) {
+      return jsonResponse({
+        items: [
+          { track: { id: "afterlife-album-track", name: "Afterlife" } },
+          { track: { id: "calm-down", name: "Calm Down" } },
+        ],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const [afterlifeItem] = await enrichTrackItemsWithAlbumOwners([
+    {
+      track: {
+        id: "afterlife-single-track",
+        name: "Afterlife (from the Netflix Series \"Devil May Cry\")",
+        artists: [{ id: "evanescence", name: "Evanescence" }],
+        albums: [
+          {
+            id: "single-afterlife",
+            name: "Afterlife (from the Netflix Series \"Devil May Cry\")",
+            type: "single",
+            totalTracks: 1,
+            artists: [{ id: "evanescence", name: "Evanescence" }],
+          },
+        ],
+      },
+    },
+    {
+      track: {
+        id: "calm-down-track",
+        name: "Calm Down",
+        artists: [{ id: "evanescence", name: "Evanescence" }],
+        albums: [
+          {
+            id: "sanctuary",
+            name: "Sanctuary",
+            type: "album",
+            totalTracks: 12,
+            artists: [{ id: "evanescence", name: "Evanescence" }],
+          },
+        ],
+      },
+    },
+  ], {
+    useTrackStreamEvidence: false,
+  });
+
+  const afterlifeTrack: any = normalizeTopItem(afterlifeItem, "tracks");
+  assert.equal(afterlifeTrack.id, "afterlife-album-track");
+  assert.equal(afterlifeTrack.albumId, "sanctuary");
+  assert.equal(afterlifeTrack.albumName, "Sanctuary");
 });
 
 test("recent album context can prefer a confirmed expanded album edition", async () => {
@@ -1393,8 +1465,30 @@ test("stream row album id replaces recent track album with album detail", async 
         item: {
           id: "album-main",
           name: "Main Album",
+          type: "album",
+          totalTracks: 4,
           artists: [{ id: "artist-1", name: "Main Artist" }],
         },
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/rival-album/tracks")) {
+      return jsonResponse({
+        items: [
+          {
+            track: {
+              id: "rival-track",
+              name: "Song From Single",
+              externalIds: { appleMusic: ["apple-track-1"] },
+              artists: [{ id: "artist-1", name: "Main Artist" }],
+              albums: [{
+                id: "rival-album",
+                name: "Rival Catalog Album",
+                image: "https://img.test/rival.jpg",
+              }],
+            },
+          },
+        ],
       });
     }
 
@@ -1407,8 +1501,23 @@ test("stream row album id replaces recent track album with album detail", async 
       track: {
         id: "track-1",
         name: "Song From Single",
+        externalIds: { appleMusic: ["apple-track-1"] },
         artists: [{ id: "artist-1", name: "Main Artist" }],
         albums: [{ id: "single-1", name: "Wrong Single" }],
+      },
+    },
+    {
+      track: {
+        id: "context-track",
+        name: "Another Song",
+        artists: [{ id: "artist-1", name: "Main Artist" }],
+        albums: [{
+          id: "rival-album",
+          name: "Rival Catalog Album",
+          type: "album",
+          totalTracks: 12,
+          artists: [{ id: "artist-1", name: "Main Artist" }],
+        }],
       },
     },
   ], { cacheProfile: "live" });

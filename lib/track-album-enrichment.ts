@@ -12,6 +12,12 @@ type TrackAlbumEvidenceOptions = FetchOptions & {
   useTrackStreamEvidence?: boolean;
   trackStreamEvidenceStrategy?: "majority" | "latest";
 };
+type AlbumTrackMatches = {
+  byId: Map<string, any>;
+  bySpotify: Map<string, any>;
+  byAppleMusic: Map<string, any>;
+  byTitle: Map<string, any>;
+};
 
 function readText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -51,6 +57,12 @@ function getAppleMusicId(track: any) {
   const directId = readText(track?.appleMusicId);
   if (directId) return directId;
   return normalizeExternalIds(track).appleMusic[0] ?? null;
+}
+
+function getSpotifyId(track: any) {
+  const directId = readText(track?.spotifyId);
+  if (directId) return directId;
+  return normalizeExternalIds(track).spotify[0] ?? null;
 }
 
 function getTrackId(item: any) {
@@ -235,7 +247,8 @@ function mergeAlbumIntoTrackItem<T>(item: T, album: any): T {
 }
 
 function mergeCatalogTrackIntoItem<T>(item: T, album: any, catalogTrack: any): T {
-  const albumEnriched = mergeAlbumIntoTrackItem(item, album) as any;
+  const catalogAlbum = getTrackAlbum(catalogTrack) ?? album;
+  const albumEnriched = mergeAlbumIntoTrackItem(item, catalogAlbum) as any;
   const track = getTrackValue(albumEnriched);
   if (!track || !catalogTrack) return albumEnriched as T;
 
@@ -254,7 +267,7 @@ function mergeCatalogTrackIntoItem<T>(item: T, album: any, catalogTrack: any): T
     explicit: catalogTrack.explicit ?? track.explicit,
     spotifyPreview: catalogTrack.spotifyPreview ?? track.spotifyPreview,
     appleMusicPreview: catalogTrack.appleMusicPreview ?? track.appleMusicPreview,
-    image: catalogTrack.image ?? album?.image ?? track.image,
+    image: catalogTrack.image ?? catalogAlbum?.image ?? track.image,
     artists,
     spotifyId,
     appleMusicId,
@@ -351,20 +364,71 @@ async function fetchAlbumTrackMatches(albumId: string, options: FetchOptions) {
     requestTimeoutMs: Math.min(options.requestTimeoutMs ?? 1000, 1000),
   });
 
-  if (!result.ok) return new Map<string, any>();
+  const empty = {
+    byId: new Map<string, any>(),
+    bySpotify: new Map<string, any>(),
+    byAppleMusic: new Map<string, any>(),
+    byTitle: new Map<string, any>(),
+  };
+  if (!result.ok) return empty;
 
-  const matches = new Map<string, any>();
+  const matches = empty;
   for (const item of Array.isArray((result.data as any)?.items) ? (result.data as any).items : []) {
     const track = getTrackValue(item);
-    const key = canonicalTrackTitle(track?.name);
-    if (key && !matches.has(key)) matches.set(key, track);
+    if (!track) continue;
+
+    if (track.id != null) {
+      const key = String(track.id);
+      if (!matches.byId.has(key)) matches.byId.set(key, track);
+    }
+
+    const spotifyId = getSpotifyId(track);
+    if (spotifyId && !matches.bySpotify.has(spotifyId)) matches.bySpotify.set(spotifyId, track);
+
+    const appleMusicId = getAppleMusicId(track);
+    if (appleMusicId && !matches.byAppleMusic.has(appleMusicId)) matches.byAppleMusic.set(appleMusicId, track);
+
+    const titleKey = canonicalTrackTitle(track?.name);
+    if (titleKey && !matches.byTitle.has(titleKey)) matches.byTitle.set(titleKey, track);
   }
   return matches;
 }
 
+function getCatalogTrackMatch(matches: AlbumTrackMatches, track: any) {
+  const directId = track?.id == null ? null : String(track.id);
+  if (directId) {
+    const match = matches.byId.get(directId);
+    if (match) return match;
+  }
+
+  const spotifyId = getSpotifyId(track);
+  if (spotifyId) {
+    const match = matches.bySpotify.get(spotifyId);
+    if (match) return match;
+  }
+
+  const appleMusicId = getAppleMusicId(track);
+  if (appleMusicId) {
+    const match = matches.byAppleMusic.get(appleMusicId);
+    if (match) return match;
+  }
+
+  const titleKey = canonicalTrackTitle(track?.name);
+  return titleKey ? matches.byTitle.get(titleKey) ?? null : null;
+}
+
+function hasCatalogTrackMatchKey(track: any) {
+  return Boolean(
+    track?.id != null ||
+    getSpotifyId(track) ||
+    getAppleMusicId(track) ||
+    canonicalTrackTitle(track?.name)
+  );
+}
+
 async function enrichTracksWithRecentAlbumContext<T>(
   items: T[],
-  options: FetchOptions
+  options: FetchOptions & { protectedTrackIds?: Set<string> }
 ): Promise<T[]> {
   const sourceItems = Array.isArray(items) ? items : [];
   const albumCandidates = new Map<string, { album: any; count: number; firstIndex: number }>();
@@ -404,13 +468,13 @@ async function enrichTracksWithRecentAlbumContext<T>(
   const replacementCandidates = sourceItems.filter((item: any) => {
     const track = getTrackValue(item);
     const album = getTrackAlbum(track);
-    return Boolean(track && album && canonicalTrackTitle(track?.name));
+    return Boolean(track && album && hasCatalogTrackMatchKey(track));
   });
 
   if (replacementCandidates.length === 0) return sourceItems;
 
   const albumIds = [...contextAlbumById.keys()].slice(0, 4);
-  const trackMatchesByAlbumId = new Map<string, Map<string, any>>();
+  const trackMatchesByAlbumId = new Map<string, AlbumTrackMatches>();
   await mapWithConcurrency(albumIds, 2, async (albumId) => {
     trackMatchesByAlbumId.set(albumId, await fetchAlbumTrackMatches(albumId, options));
   });
@@ -422,17 +486,20 @@ async function enrichTracksWithRecentAlbumContext<T>(
     const album = getTrackAlbum(track);
     if (!track || !album) return item;
 
-    const titleKey = canonicalTrackTitle(track?.name);
-    if (!titleKey) return item;
+    const trackId = getTrackId(item);
+    if (trackId && options.protectedTrackIds?.has(trackId)) return item;
+
+    if (!hasCatalogTrackMatchKey(track)) return item;
 
     const matched = albumIds
       .map((candidateAlbumId) => {
         const candidateAlbum = contextAlbumById.get(candidateAlbumId);
         const albumId = albumIdForDetail(candidateAlbum);
-        const catalogTrack = albumId ? trackMatchesByAlbumId.get(albumId)?.get(titleKey) : null;
+        const matches = albumId ? trackMatchesByAlbumId.get(albumId) : null;
+        const catalogTrack = matches ? getCatalogTrackMatch(matches, track) : null;
 
         return albumId && catalogTrack &&
-          sameArtistContext(track, candidateAlbum) &&
+          (sameArtistContext(track, candidateAlbum) || !getAlbumArtistName(candidateAlbum)) &&
           hasSharedArtist(track, catalogTrack)
           ? { album: candidateAlbum, track: catalogTrack }
           : null;
@@ -726,7 +793,23 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
     ? enrichTopTracksWithAlbumOwners(streamEnriched, options.albumItems)
     : streamEnriched;
 
-  const contextEnriched = await enrichTracksWithRecentAlbumContext(lookupEnriched as T[], options);
+  const streamResolvedTrackIds = new Set<string>();
+  for (const item of sourceItems) {
+    const trackId = getTrackId(item);
+    if (!trackId) continue;
+    if (
+      trackStreamEvidence.has(trackId) ||
+      streamAlbumEvidence.has(trackId) ||
+      (item as any)?.albumId != null && directStreamAlbumDetails.has(String((item as any).albumId))
+    ) {
+      streamResolvedTrackIds.add(trackId);
+    }
+  }
+
+  const contextEnriched = await enrichTracksWithRecentAlbumContext(lookupEnriched as T[], {
+    ...options,
+    protectedTrackIds: streamResolvedTrackIds,
+  });
   const appleMusicEnriched = await enrichTracksWithAppleMusicOwners(contextEnriched as T[], options);
 
   const albumIds = [
