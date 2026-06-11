@@ -23,6 +23,8 @@ avulso como substituto do comando suportado pelo repo.
   timeout e retry.
 - `lib/user-stats-service.ts`: stats e intervalos temporais.
 - `lib/user-streams-service.ts`: recentes e historicos.
+- `lib/history-backup.ts` e `lib/history-store.ts`: backup de meses
+  fechados do historico em Postgres/Neon.
 - `lib/user-tops-service.ts`: tops normalizados.
 - `lib/track-album-enrichment.ts`: resolucao de album por evidencia do
   historico do usuario.
@@ -73,5 +75,7 @@ regressao, mas nao sao SLOs.
 
 - [`docs/api-contract.md`](./docs/api-contract.md): contrato publico,
   resiliencia, cache, endpoints e checkpoint de performance.
+- [`docs/history-backup.md`](./docs/history-backup.md): backup mensal de
+  historico fechado, comandos e workflow.
 - [`docs/track-album-resolution.md`](./docs/track-album-resolution.md): regra
   obrigatoria para album real em payloads de faixa.

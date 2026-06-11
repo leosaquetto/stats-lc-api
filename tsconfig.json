@@ -16,7 +16,8 @@
   },
   "include": [
     "api/**/*.ts",
-    "lib/**/*.ts"
+    "lib/**/*.ts",
+    "scripts/**/*.ts"
   ],
   "exclude": [
     "lib/*.test.ts",

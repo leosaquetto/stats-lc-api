@@ -140,6 +140,13 @@ After changing `GENIUS_ACCESS_TOKEN` in Vercel, redeploy the API so serverless f
 - Normal endpoint payloads should not expose `statsfmFetch` cache/cooldown/stale metadata. Use `/api/health` or explicit debug surfaces.
 - `debug=1` is intentionally limited to selected endpoints and sanitizes sensitive keys matching token, authorization, cookie, secret, or session.
 
+### Closed-month history backup
+
+The repo includes an operational backup workflow for closed-month stream history.
+It stores normalized stream events in Postgres/Neon through local scripts and
+GitHub Actions; it does not change public API payloads in V1. See
+[`docs/history-backup.md`](./history-backup.md).
+
 ## Reference App Route Matrix
 
 - `/:id` and `/user/:id/[[...deeplink]]` -> existing `/api/user`, `/api/group`, `/api/group-live`, `/api/top`, `/api/stats`, and the new detail/list endpoints as needed.

@@ -1,0 +1,80 @@
+name: History Backup
+
+on:
+  schedule:
+    - cron: "17 5 2 * *"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "History command to run"
+        type: choice
+        required: true
+        default: "backup-previous-month"
+        options:
+          - estimate
+          - backfill
+          - backup-previous-month
+          - reconcile
+          - status
+      user:
+        description: "Configured user key"
+        required: true
+        default: "leo"
+      from:
+        description: "Start month for estimate/backfill (YYYY-MM)"
+        required: false
+      to:
+        description: "End month for estimate/backfill (YYYY-MM)"
+        required: false
+      month:
+        description: "Month for reconcile (YYYY-MM)"
+        required: false
+
+jobs:
+  history-backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run monthly scheduled backup
+        if: github.event_name == 'schedule'
+        run: npm run history:backup-previous-month -- --user=leo
+
+      - name: Run manual estimate
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'estimate'
+        run: |
+          ARGS="--user=${{ inputs.user }}"
+          if [ -n "${{ inputs.from }}" ]; then ARGS="$ARGS --from=${{ inputs.from }}"; fi
+          if [ -n "${{ inputs.to }}" ]; then ARGS="$ARGS --to=${{ inputs.to }}"; fi
+          npm run history:estimate -- $ARGS
+
+      - name: Run manual backfill
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'backfill'
+        run: |
+          ARGS="--user=${{ inputs.user }}"
+          if [ -n "${{ inputs.from }}" ]; then ARGS="$ARGS --from=${{ inputs.from }}"; fi
+          if [ -n "${{ inputs.to }}" ]; then ARGS="$ARGS --to=${{ inputs.to }}"; fi
+          npm run history:backfill -- $ARGS
+
+      - name: Run manual previous month backup
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'backup-previous-month'
+        run: npm run history:backup-previous-month -- --user=${{ inputs.user }}
+
+      - name: Run manual reconcile
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'reconcile'
+        run: npm run history:reconcile -- --user=${{ inputs.user }} --month=${{ inputs.month }}
+
+      - name: Run manual status
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'status'
+        run: npm run history:status -- --user=${{ inputs.user }}
