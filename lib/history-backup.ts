@@ -40,7 +40,7 @@ export type HistoryBackupResult = HistoryMonth & {
 
 type HistoryFetchers = {
   fetchStats(userId: string, month: HistoryMonth): Promise<StatsfmResult>;
-  fetchStreams(userId: string, month: HistoryMonth, limit: number, offset: number): Promise<StatsfmResult>;
+  fetchStreams(userId: string, month: HistoryMonth, limit: number, beforeMs: number): Promise<StatsfmResult>;
 };
 
 type HistoryStore = {
@@ -73,7 +73,7 @@ export type HistoryBackupOptions = {
   store?: HistoryStore;
 };
 
-const DEFAULT_PAGE_SIZE = 1000;
+const DEFAULT_PAGE_SIZE = 10000;
 const MONTH_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: TIMEZONE_SP,
   year: "numeric",
@@ -166,18 +166,17 @@ function defaultFetchers(): HistoryFetchers {
       return statsfmFetch(
         `/users/${encodeSegment(userId)}/streams/stats${buildQuery({
           after: month.afterMs,
-          before: month.beforeMs,
+          before: month.beforeMs - 1,
         })}`,
         { force: false, cacheProfile: "heavy", requestTimeoutMs: 8000, maxRetries: 1 }
       );
     },
-    fetchStreams(userId, month, limit, offset) {
+    fetchStreams(userId, month, limit, beforeMs) {
       return statsfmFetch(
         `/users/${encodeSegment(userId)}/streams${buildQuery({
           after: month.afterMs,
-          before: month.beforeMs,
+          before: beforeMs,
           limit,
-          offset,
         })}`,
         { force: false, cacheProfile: "heavy", requestTimeoutMs: 8000, maxRetries: 1 }
       );
@@ -310,29 +309,35 @@ export async function backupHistoryMonth(
 
   let fetchedCount = 0;
   let skippedCount = 0;
-  const pages = Math.ceil(expectedCount / pageSize);
+  let cursorBeforeMs = month.beforeMs - 1;
+  const maxPages = Math.max(1, Math.ceil(expectedCount / pageSize) + 2);
 
-  for (let page = 0; page < pages; page += 1) {
-    const offset = page * pageSize;
-    const limit = Math.min(pageSize, expectedCount - offset);
-    const result = await fetchers.fetchStreams(user.id, month, limit, offset);
+  for (let page = 0; page < maxPages && cursorBeforeMs >= month.afterMs; page += 1) {
+    const result = await fetchers.fetchStreams(user.id, month, pageSize, cursorBeforeMs);
     if (!result.ok) {
-      errors.push(`streams page offset=${offset} status=${result.status}`);
+      errors.push(`streams page before=${cursorBeforeMs} status=${result.status}`);
       break;
     }
 
     const streams = getItems(result.data);
+    if (streams.length === 0) break;
     fetchedCount += streams.length;
     const events = streams
       .map((stream: any) => normalizeHistoryEvent(stream, user))
       .filter((event: StreamHistoryEvent | null): event is StreamHistoryEvent => {
-        if (event) return true;
+        if (event && event.playedAtMs >= month.afterMs && event.playedAtMs < month.beforeMs) return true;
         skippedCount += 1;
         return false;
       });
     await store.upsertEvents(events);
 
-    if (streams.length < limit) break;
+    const oldestTimestamp = events.reduce(
+      (minimum: number, event: StreamHistoryEvent) => Math.min(minimum, event.playedAtMs),
+      Number.POSITIVE_INFINITY
+    );
+    if (!Number.isFinite(oldestTimestamp)) break;
+    cursorBeforeMs = oldestTimestamp - 1;
+    if (events.length < pageSize || fetchedCount >= expectedCount + skippedCount) break;
   }
 
   const storedCount = await store.countEventsForMonth(user.key, month.afterMs, month.beforeMs);

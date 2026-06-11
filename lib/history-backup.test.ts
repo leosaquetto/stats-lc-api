@@ -113,8 +113,8 @@ test("backupHistoryMonth stores a complete closed month", async () => {
       async fetchStats() {
         return result({ items: { count: 2, durationMs: 360000 } });
       },
-      async fetchStreams(_userId, _month, _limit, offset) {
-        assert.equal(offset, 0);
+      async fetchStreams(_userId, currentMonth, _limit, beforeMs) {
+        assert.equal(beforeMs, currentMonth.beforeMs - 1);
         return result({
           items: [
             stream("one", "2026-01-02T10:00:00.000Z"),
@@ -167,8 +167,8 @@ test("backupHistoryMonth marks partial when a later page fails", async () => {
       async fetchStats() {
         return result({ items: { count: 2, durationMs: 360000 } });
       },
-      async fetchStreams(_userId, _month, _limit, offset) {
-        return offset === 0
+      async fetchStreams(_userId, currentMonth, _limit, beforeMs) {
+        return beforeMs === currentMonth.beforeMs - 1
           ? result({ items: [stream("one", "2026-01-02T10:00:00.000Z")] })
           : result({ error: "upstream_failed" }, 503);
       },
