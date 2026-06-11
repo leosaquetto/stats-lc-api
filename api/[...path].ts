@@ -22,6 +22,7 @@ import statsDatesHandler from "../lib/api-handlers/stats-dates.js";
 import statsHandler from "../lib/api-handlers/stats.js";
 import simultaneousHandler from "../lib/api-handlers/simultaneous.js";
 import topHandler from "../lib/api-handlers/top.js";
+import trackStoryHandler from "../lib/api-handlers/track-story.js";
 import userFriendsHandler from "../lib/api-handlers/user-friends.js";
 import userStreamsHandler from "../lib/api-handlers/user-streams.js";
 import userHandler from "../lib/api-handlers/user.js";
@@ -54,6 +55,7 @@ const ROUTES: Record<string, Handler> = {
   stats: statsHandler,
   simultaneous: simultaneousHandler,
   top: topHandler,
+  "track-story": trackStoryHandler,
   "user-friends": userFriendsHandler,
   "user-streams": userStreamsHandler,
   user: userHandler,

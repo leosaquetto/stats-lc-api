@@ -1,0 +1,595 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import {
+  encodeSegment,
+  getItems,
+  mapWithConcurrency,
+  readOptionalQueryString,
+  readQueryString,
+  setCacheHeaders,
+} from "../api-helpers.js";
+import { normalizeRecentItem, normalizeTopItem } from "../normalize.js";
+import { getCount, getDurationMs, statsfmFetch } from "../statsfm.js";
+import { USERS, resolveUserId } from "../users.js";
+import { fetchUserEntityStreams } from "../user-streams-service.js";
+import { fetchUserTop } from "../user-tops-service.js";
+
+const PAGE_SIZE = 100;
+const MAX_HISTORY_PAGES = 10;
+const DEADLINE_MS = 6800;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const routeMap = {
+  track: "tracks",
+  album: "albums",
+  artist: "artists",
+} as const;
+
+type EntityKind = keyof typeof routeMap;
+
+type CountRow = {
+  key: string;
+  id: string;
+  count: number;
+  durationMs: number;
+  minutes: number;
+  error?: unknown;
+};
+
+function getEmptyGroupRows(): CountRow[] {
+  return (Object.entries(USERS) as Array<[string, { id: string }]>).map(([key, user]) => ({
+    key,
+    id: user.id,
+    count: 0,
+    durationMs: 0,
+    minutes: 0,
+    error: "timeout",
+  }));
+}
+
+async function withTimedFallback<T>(promise: Promise<T>, timeoutMs: number, fallback: T) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  try {
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        resolve(fallback);
+      }, timeoutMs);
+    });
+    const data = await Promise.race([promise.catch(() => fallback), timeoutPromise]);
+    return { data, timedOut };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function splitCsv(value: string | null) {
+  if (!value) return [];
+  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
+}
+
+function clampTimeout(deadline: number, min = 250, max = 1200) {
+  return Math.max(min, Math.min(max, deadline - Date.now()));
+}
+
+function readTime(item: any) {
+  const raw = item?.playedAt ?? item?.endTime ?? item?.timestamp ?? item?.date ?? item?.createdAt;
+  const time = raw ? new Date(raw).getTime() : Number.NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function saoPauloParts(value: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(value));
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(map.year) || 0,
+    month: Number(map.month) || 0,
+    day: Number(map.day) || 0,
+    hour: Number(map.hour) || 0,
+    dayKey: `${map.year}-${map.month}-${map.day}`,
+  };
+}
+
+function releaseDayKey(value: string | null) {
+  if (!value) return "";
+  const time = /^\d+$/.test(value.trim()) ? Number(value) : new Date(value).getTime();
+  if (!Number.isFinite(time) || time <= 0) return "";
+  const date = new Date(time);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function previousUtcDayKey(dayKey: string) {
+  if (!dayKey) return "";
+  const date = new Date(`${dayKey}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return "";
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function isReleaseWindow(playedAt: number, releaseKey: string) {
+  if (!playedAt || !releaseKey) return false;
+  const playedKey = saoPauloParts(playedAt).dayKey;
+  return playedKey === releaseKey || playedKey === previousUtcDayKey(releaseKey);
+}
+
+async function getEntityStatsForUser(
+  key: string,
+  userId: string,
+  type: EntityKind,
+  id: string,
+  deadline: number
+): Promise<CountRow> {
+  if (!id || Date.now() >= deadline) {
+    return { key, id: userId, count: 0, durationMs: 0, minutes: 0, error: "deadline" };
+  }
+
+  const result = await statsfmFetch(
+    `/users/${encodeSegment(userId)}/streams/${routeMap[type]}/${encodeSegment(id)}/stats`,
+    {
+      force: false,
+      requestTimeoutMs: clampTimeout(deadline),
+      maxRetries: 0,
+    }
+  );
+
+  if (!result.ok) {
+    return {
+      key,
+      id: userId,
+      count: 0,
+      durationMs: 0,
+      minutes: 0,
+      error: {
+        ok: result.ok,
+        status: result.status,
+        endpoint: result.endpoint,
+      },
+    };
+  }
+
+  const durationMs = getDurationMs(result.data);
+  return {
+    key,
+    id: userId,
+    count: getCount(result.data),
+    durationMs,
+    minutes: Math.floor(durationMs / 60000),
+  };
+}
+
+async function getEntityStatsForGroup(type: EntityKind, id: string, deadline: number) {
+  const users = Object.entries(USERS) as Array<[string, { id: string }]>;
+  const settled = await mapWithConcurrency(users, 2, ([key, user]) =>
+    getEntityStatsForUser(key, user.id, type, id, deadline)
+  );
+
+  return settled.map((result, index) => {
+    if (result.status === "fulfilled") return result.value;
+    const [key, user] = users[index];
+    return {
+      key,
+      id: user.id,
+      count: 0,
+      durationMs: 0,
+      minutes: 0,
+      error: String(result.reason),
+    };
+  });
+}
+
+async function fetchOwnTrackHistory(userId: string, trackId: string, totalCount: number, deadline: number) {
+  const items: any[] = [];
+  let fetchedPages = 0;
+  let partial = false;
+
+  for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+    if (Date.now() >= deadline) {
+      partial = true;
+      break;
+    }
+
+    const result = await fetchUserEntityStreams(
+      userId,
+      "tracks",
+      trackId,
+      { limit: PAGE_SIZE, offset: page * PAGE_SIZE },
+      {
+        force: false,
+        cacheProfile: "heavy",
+        requestTimeoutMs: clampTimeout(deadline, 300, 1400),
+        maxRetries: 0,
+      }
+    );
+
+    if (!result.ok) {
+      partial = true;
+      break;
+    }
+
+    const pageItems = getItems(result.data).map(normalizeRecentItem).filter((item: any) => readTime(item) > 0);
+    items.push(...pageItems);
+    fetchedPages += 1;
+
+    if (pageItems.length < PAGE_SIZE) break;
+    if (totalCount > 0 && items.length >= totalCount) break;
+  }
+
+  if (totalCount > 0 && items.length < totalCount) partial = true;
+  return { items, fetchedPages, partial };
+}
+
+async function getFirstPlayedForUser(key: string, userId: string, trackId: string, deadline: number) {
+  if (Date.now() >= deadline) return { key, id: userId, playedAt: null as string | null, error: "deadline" };
+
+  const result = await fetchUserEntityStreams(
+    userId,
+    "tracks",
+    trackId,
+    { limit: 1, order: "asc" },
+    {
+      force: false,
+      cacheProfile: "default",
+      requestTimeoutMs: clampTimeout(deadline, 250, 900),
+      maxRetries: 0,
+    }
+  );
+
+  if (!result.ok) return { key, id: userId, playedAt: null as string | null, error: result.status };
+  const item = getItems(result.data)[0];
+  return { key, id: userId, playedAt: item?.endTime ?? item?.playedAt ?? null };
+}
+
+async function getFirstListeners(trackId: string, counts: CountRow[], deadline: number) {
+  const users = Object.entries(USERS) as Array<[string, { id: string }]>;
+  const settled = await mapWithConcurrency(users, 3, ([key, user]) =>
+    getFirstPlayedForUser(key, user.id, trackId, deadline)
+  );
+  const countById = new Map(counts.map((row) => [row.id, row.count]));
+  let partial = false;
+  const listeners = settled
+    .map((result, index) => {
+      if (result.status !== "fulfilled") {
+        partial = true;
+        const [key, user] = users[index];
+        return { key, id: user.id, playedAt: 0, count: countById.get(user.id) || 0 };
+      }
+      if (result.value.error) partial = true;
+      return {
+        key: result.value.key,
+        id: result.value.id,
+        playedAt: result.value.playedAt ? new Date(result.value.playedAt).getTime() : 0,
+        count: countById.get(result.value.id) || 0,
+      };
+    })
+    .filter((item) => item.playedAt > 0)
+    .sort((a, b) => a.playedAt - b.playedAt);
+
+  return { listeners, partial };
+}
+
+function summarizeHistory(items: any[], totalCount: number) {
+  const times = items
+    .map(readTime)
+    .filter((time) => time > 0)
+    .sort((a, b) => a - b);
+  const years = new Map<number, number>();
+  const months = new Map<number, number>();
+  const days = new Map<string, number>();
+  const hours = new Map<number, number>();
+
+  for (const time of times) {
+    const parts = saoPauloParts(time);
+    years.set(parts.year, (years.get(parts.year) || 0) + 1);
+    months.set(parts.month, (months.get(parts.month) || 0) + 1);
+    days.set(parts.dayKey, (days.get(parts.dayKey) || 0) + 1);
+    hours.set(parts.hour, (hours.get(parts.hour) || 0) + 1);
+  }
+
+  const bestYearEntry = [...years.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
+  const bestYear = bestYearEntry
+    ? {
+        year: bestYearEntry[0],
+        count: bestYearEntry[1],
+        previousYearCount: years.get(bestYearEntry[0] - 1) || 0,
+        nextYearCount: years.get(bestYearEntry[0] + 1) || 0,
+      }
+    : null;
+
+  const loopEntry = [...days.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  const dayKeys = [...days.keys()].sort();
+  let streak = { days: 0, start: null as string | null, end: null as string | null };
+  let current = { days: 0, start: null as string | null, end: null as string | null };
+
+  for (const dayKey of dayKeys) {
+    if (!current.end) {
+      current = { days: 1, start: dayKey, end: dayKey };
+    } else {
+      const previous = new Date(`${current.end}T00:00:00.000Z`);
+      previous.setUTCDate(previous.getUTCDate() + 1);
+      const expected = previous.toISOString().slice(0, 10);
+      current = expected === dayKey
+        ? { ...current, days: current.days + 1, end: dayKey }
+        : { days: 1, start: dayKey, end: dayKey };
+    }
+    if (current.days > streak.days) streak = { ...current };
+  }
+
+  const dayparts = [
+    { key: "dawn", label: "madrugada", hours: [0, 1, 2, 3, 4, 5] },
+    { key: "morning", label: "manhã", hours: [6, 7, 8, 9, 10, 11] },
+    { key: "afternoon", label: "tarde", hours: [12, 13, 14, 15, 16, 17] },
+    { key: "night", label: "noite", hours: [18, 19, 20, 21, 22, 23] },
+  ].map((part) => ({
+    key: part.key,
+    label: part.label,
+    count: part.hours.reduce((sum, hour) => sum + (hours.get(hour) || 0), 0),
+  }));
+  const bestDaypart = dayparts.sort((a, b) => b.count - a.count)[0] || null;
+  const firstPlayedAt = times[0] || 0;
+  const lastPlayedAt = times[times.length - 1] || 0;
+  let maxGapDays = 0;
+  let maxGapStart: number | null = null;
+  let maxGapEnd: number | null = null;
+
+  for (let index = 1; index < times.length; index += 1) {
+    const gap = Math.floor((times[index] - times[index - 1]) / DAY_MS);
+    if (gap > maxGapDays) {
+      maxGapDays = gap;
+      maxGapStart = times[index - 1];
+      maxGapEnd = times[index];
+    }
+  }
+
+  const playedCount = totalCount || times.length;
+  const monthKeys = [...months.keys()].filter((month) => month > 0);
+
+  return {
+    count: playedCount,
+    firstPlayedAt: firstPlayedAt ? new Date(firstPlayedAt).toISOString() : null,
+    lastPlayedAt: lastPlayedAt ? new Date(lastPlayedAt).toISOString() : null,
+    bestYear,
+    advanced: playedCount > 10
+      ? {
+          streak,
+          loopFactor: loopEntry ? { day: loopEntry[0], count: loopEntry[1] } : null,
+          daypart: bestDaypart
+            ? {
+                key: bestDaypart.key,
+                label: bestDaypart.label,
+                count: bestDaypart.count,
+                percent: playedCount > 0 ? Math.round((bestDaypart.count / playedCount) * 100) : 0,
+              }
+            : null,
+          daysSinceFirst: firstPlayedAt ? Math.max(0, Math.floor((Date.now() - firstPlayedAt) / DAY_MS)) : null,
+          top1kPosition: null as number | null,
+        }
+      : null,
+    specialSignals: {
+      seasonalMonth: playedCount >= 3 && monthKeys.length === 1 ? monthKeys[0] : null,
+      maxGapDays,
+      maxGapStart: maxGapStart ? new Date(maxGapStart).toISOString() : null,
+      maxGapEnd: maxGapEnd ? new Date(maxGapEnd).toISOString() : null,
+    },
+  };
+}
+
+async function getTop1kPosition(userId: string, trackId: string, deadline: number) {
+  if (Date.now() >= deadline) return { position: null as number | null, partial: true };
+  const result = await fetchUserTop(userId, "tracks", 0, 1000, {
+    force: false,
+    cacheProfile: "heavy",
+    requestTimeoutMs: clampTimeout(deadline, 500, 1600),
+    maxRetries: 0,
+  });
+  if (!result.ok) return { position: null as number | null, partial: true };
+  const items = getItems(result.data).map((item: any) => normalizeTopItem(item, "tracks")).filter(Boolean);
+  const match = items.find((item: any, index: number) => {
+    const id = item?.id == null ? "" : String(item.id);
+    return id === trackId || String(item?.trackId || "") === trackId || item?.position === trackId || index === -1;
+  }) as any;
+  return { position: match ? Number(match.position || items.indexOf(match) + 1) : null, partial: false };
+}
+
+function makeSpecialCard(code: string, label: string, tone: string, detail: string, value?: string | number | null) {
+  return { code, label, tone, detail, value: value ?? null };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const user = readQueryString(req.query.user);
+  const trackId = readQueryString(req.query.track);
+  const albumId = readOptionalQueryString(req.query.album);
+  const artistIds = splitCsv(readOptionalQueryString(req.query.artists)).slice(0, 5);
+  const releaseKey = releaseDayKey(readOptionalQueryString(req.query.releaseDate));
+
+  if (!user || !trackId) {
+    return res.status(400).json({ ok: false, error: "missing_user_or_track" });
+  }
+
+  const userId = resolveUserId(user);
+  const deadline = Date.now() + DEADLINE_MS;
+  const emptyArtistCounts = artistIds.map((artistId) => ({
+    key: user,
+    id: userId,
+    count: 0,
+    durationMs: 0,
+    minutes: 0,
+    artistId,
+    error: "timeout",
+  }));
+  const [trackCountsResult, albumCountResult, artistCountsResult, ownHistoryResult] = await Promise.all([
+    withTimedFallback(getEntityStatsForGroup("track", trackId, deadline), 2600, getEmptyGroupRows()),
+    albumId
+      ? withTimedFallback(getEntityStatsForUser(user, userId, "album", albumId, deadline), 1500, null)
+      : Promise.resolve({ data: null, timedOut: false }),
+    withTimedFallback(
+      Promise.all(artistIds.map((artistId) => getEntityStatsForUser(user, userId, "artist", artistId, deadline))),
+      1800,
+      emptyArtistCounts
+    ),
+    withTimedFallback(
+      fetchOwnTrackHistory(userId, trackId, 0, deadline),
+      3200,
+      { items: [], fetchedPages: 0, partial: true }
+    ),
+  ]);
+
+  const trackCounts = trackCountsResult.data;
+  const albumCount = albumCountResult.data;
+  const artistCounts = artistCountsResult.data;
+  const ownHistory = ownHistoryResult.data;
+  const ownTrackCountFromStats = trackCounts.find((row) => row.id === userId)?.count || 0;
+  const ownTrackCount = ownTrackCountFromStats || ownHistory.items.length;
+  const history = summarizeHistory(ownHistory.items, ownTrackCount);
+  const firstListenersTimed = await withTimedFallback(
+    getFirstListeners(trackId, trackCounts, deadline),
+    2400,
+    { listeners: [], partial: true }
+  );
+  const firstListenersResult = firstListenersTimed.data;
+  const ranking = trackCounts
+    .filter((row) => row.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .map((row, index) => ({
+      key: row.key,
+      id: row.id,
+      count: row.count,
+      durationMs: row.durationMs,
+      minutes: row.minutes,
+      position: index + 1,
+    }));
+
+  let topPartial = false;
+  if (history.advanced) {
+    const top1kTimed = await withTimedFallback(
+      getTop1kPosition(userId, trackId, deadline),
+      1400,
+      { position: null as number | null, partial: true }
+    );
+    const top1k = top1kTimed.data;
+    history.advanced.top1kPosition = top1k.position;
+    topPartial = top1k.partial || top1kTimed.timedOut;
+  }
+
+  const releaseListeners = releaseKey
+    ? firstListenersResult.listeners.filter((listener) => isReleaseWindow(listener.playedAt, releaseKey))
+    : [];
+  const ownFirst = firstListenersResult.listeners.find((listener) => listener.id === userId);
+  const ownFirstPlayedAt = ownFirst?.playedAt || (history.firstPlayedAt ? new Date(history.firstPlayedAt).getTime() : 0);
+  const heardOnRelease = isReleaseWindow(ownFirstPlayedAt, releaseKey);
+  const firstPlayedAt = firstListenersResult.listeners[0]?.playedAt || 0;
+  const heardFirst = !!ownFirstPlayedAt && !!firstPlayedAt && ownFirstPlayedAt === firstPlayedAt;
+  const totalCirclePlays = ranking.reduce((sum, row) => sum + row.count, 0);
+  const friendsWithAnyPlay = ranking.filter((row) => row.id !== userId && row.count > 0);
+  const overTenListeners = ranking.filter((row) => row.count > 10);
+  const ownRanking = ranking.find((row) => row.id === userId);
+  const specialCards: Array<ReturnType<typeof makeSpecialCard>> = [];
+
+  if (heardOnRelease) {
+    specialCards.push(makeSpecialCard("shiny", "SHINY SONG", "shine", "Ouvida no lançamento ou na véspera.", history.firstPlayedAt));
+  }
+  if (ownTrackCount > 10 && friendsWithAnyPlay.length === 0) {
+    specialCards.push(makeSpecialCard("treasure", "TREASURE SONG", "treasure", "Mais de 10 plays só seus no círculo.", ownTrackCount));
+  }
+  if (history.specialSignals.seasonalMonth) {
+    specialCards.push(makeSpecialCard("seasonal", "SAZONAL SONG", "seasonal", "Todos os plays caem no mesmo mês.", history.specialSignals.seasonalMonth));
+  }
+  if (ownTrackCount > 10 && overTenListeners.length === 2 && overTenListeners.some((row) => row.id === userId)) {
+    specialCards.push(makeSpecialCard("special", "SPECIAL SONG", "special", "Só você e mais um amigo passaram de 10 plays.", overTenListeners[1]?.count));
+  }
+  if (history.specialSignals.maxGapDays > 365) {
+    specialCards.push(makeSpecialCard("late", "THE LATE SONG", "late", "Voltou depois de mais de 1 ano sem tocar.", history.specialSignals.maxGapDays));
+  }
+
+  let jealousSignal: any = null;
+  if (ownTrackCount >= 50 && artistIds.length > 0) {
+    for (const artistId of artistIds) {
+      const artistGroupTimed = await withTimedFallback(
+        getEntityStatsForGroup("artist", artistId, deadline),
+        1800,
+        getEmptyGroupRows()
+      );
+      const artistGroup = artistGroupTimed.data;
+      const ownArtistCount = artistGroup.find((row) => row.id === userId)?.count || 0;
+      const rival = artistGroup
+        .filter((row) => row.id !== userId && row.count > ownArtistCount)
+        .sort((a, b) => b.count - a.count)[0];
+      if (rival) {
+        jealousSignal = { artistId, ownCount: ownArtistCount, rival };
+        break;
+      }
+    }
+  }
+
+  if (jealousSignal) {
+    specialCards.push(makeSpecialCard("jealous", "JEALOUS SONG", "jealous", "Você domina a faixa, mas um amigo domina um artista dela.", jealousSignal.rival.count));
+  }
+
+  const partial =
+    trackCountsResult.timedOut ||
+    albumCountResult.timedOut ||
+    artistCountsResult.timedOut ||
+    ownHistoryResult.timedOut ||
+    ownHistory.partial ||
+    firstListenersTimed.timedOut ||
+    firstListenersResult.partial ||
+    topPartial ||
+    Date.now() >= deadline;
+
+  setCacheHeaders(res, 300, false, 1800);
+  return res.status(200).json({
+    ok: true,
+    user,
+    userId,
+    trackId,
+    albumId,
+    artistIds,
+    generatedAt: new Date().toISOString(),
+    counts: {
+      track: ownTrackCount,
+      album: albumCount?.count || 0,
+      artists: artistIds.map((artistId, index) => ({
+        id: artistId,
+        count: artistCounts[index]?.count || 0,
+        durationMs: artistCounts[index]?.durationMs || 0,
+      })),
+    },
+    history: {
+      count: history.count,
+      firstPlayedAt: history.firstPlayedAt,
+      lastPlayedAt: history.lastPlayedAt,
+      bestYear: history.bestYear,
+    },
+    advanced: history.advanced,
+    social: {
+      firstListeners: firstListenersResult.listeners,
+      releaseListeners,
+      ranking,
+      ownPosition: ownRanking?.position || null,
+      cakePiecePercent: totalCirclePlays > 0 ? Math.round((ownTrackCount / totalCirclePlays) * 100) : 0,
+      heardOnRelease,
+      heardFirst,
+    },
+    specialCards,
+    coverage: {
+      partial,
+      historyPartial: ownHistory.partial || ownHistoryResult.timedOut,
+      socialPartial: firstListenersResult.partial || firstListenersTimed.timedOut,
+      topPartial,
+      fetchedHistoryPages: ownHistory.fetchedPages,
+      maxHistoryPages: MAX_HISTORY_PAGES,
+      historyItems: ownHistory.items.length,
+      deadlineMs: DEADLINE_MS,
+      deadlineHit: Date.now() >= deadline,
+    },
+  });
+}

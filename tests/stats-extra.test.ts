@@ -11,6 +11,7 @@ import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
 import simultaneousHandler from "../lib/api-handlers/simultaneous.ts";
 import topHandler from "../lib/api-handlers/top.ts";
+import trackStoryHandler from "../lib/api-handlers/track-story.ts";
 import userStreamsHandler from "../lib/api-handlers/user-streams.ts";
 import { normalizeTopItem, normalizeTrack } from "../lib/normalize.ts";
 import { USERS } from "../lib/users.ts";
@@ -741,6 +742,101 @@ test("entity-group-stats returns per-member stats and tolerates partial failures
   assert.equal(captured.body.members[0].count, 1);
   assert.equal(captured.body.members[1].count, 0);
   assert.equal(captured.body.members[2].count, 3);
+});
+
+test("track-story returns advanced history, social ranking, and special cards", async () => {
+  const ownUserId = USERS.leo.id;
+  const ownHistory = [
+    "2024-06-01T10:00:00.000Z",
+    "2026-06-02T10:00:00.000Z",
+    "2026-06-03T10:00:00.000Z",
+    "2026-06-04T11:00:00.000Z",
+    "2026-06-05T11:00:00.000Z",
+    "2026-06-06T11:00:00.000Z",
+    "2026-06-07T12:00:00.000Z",
+    "2026-06-08T12:00:00.000Z",
+    "2026-06-09T12:00:00.000Z",
+    "2026-06-10T12:00:00.000Z",
+    "2026-06-11T12:00:00.000Z",
+    "2026-06-12T12:00:00.000Z",
+  ].map((playedAt) => ({
+    endTime: playedAt,
+    track: {
+      id: "track-1",
+      name: "Special Song",
+      artists: [{ id: "artist-1", name: "Artist" }],
+    },
+  }));
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    const path = decodeURIComponent(url.pathname);
+
+    if (path.endsWith("/streams/tracks/track-1/stats")) {
+      return jsonResponse({
+        items: {
+          count: path.includes(ownUserId) ? 12 : 0,
+          durationMs: path.includes(ownUserId) ? 2400000 : 0,
+        },
+      });
+    }
+
+    if (path.endsWith("/streams/albums/album-1/stats")) {
+      return jsonResponse({ items: { count: 4, durationMs: 800000 } });
+    }
+
+    if (path.endsWith("/streams/artists/artist-1/stats")) {
+      return jsonResponse({ items: { count: 22, durationMs: 4400000 } });
+    }
+
+    if (path.includes("/streams/tracks/track-1")) {
+      if (!path.includes(ownUserId)) return jsonResponse({ items: [] });
+      if (url.searchParams.get("order") === "asc") {
+        return jsonResponse({ items: [ownHistory[0]] });
+      }
+      return jsonResponse({ items: ownHistory });
+    }
+
+    if (path.endsWith("/top/tracks")) {
+      return jsonResponse({
+        items: [
+          {
+            track: { id: "track-1", name: "Special Song" },
+            streams: 12,
+            position: 9,
+          },
+        ],
+      });
+    }
+
+    return jsonResponse({ items: [] });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await trackStoryHandler({
+    query: {
+      user: "leo",
+      track: "track-1",
+      album: "album-1",
+      artists: "artist-1",
+      releaseDate: "2024-06-02T00:00:00.000Z",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.ok, true);
+  assert.equal(captured.body.counts.track, 12);
+  assert.equal(captured.body.counts.album, 4);
+  assert.equal(captured.body.history.bestYear.year, 2026);
+  assert.equal(captured.body.history.bestYear.previousYearCount, 0);
+  assert.equal(captured.body.advanced.top1kPosition, 9);
+  assert.equal(captured.body.social.cakePiecePercent, 100);
+  assert.equal(captured.body.social.heardOnRelease, true);
+  assert.deepEqual(
+    captured.body.specialCards.map((card: any) => card.code).sort(),
+    ["late", "seasonal", "shiny", "treasure"]
+  );
 });
 
 test("normalizeTrack exposes album-owned primary artist and secondary artists", () => {
