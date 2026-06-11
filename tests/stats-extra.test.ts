@@ -841,9 +841,15 @@ test("track-story returns advanced history, social ranking, and special cards", 
   });
   assert.match(captured.headers["cache-control"], /s-maxage=300/);
   assert.deepEqual(
-    captured.body.specialCards.map((card: any) => card.code).sort(),
-    ["late", "seasonal", "shiny", "treasure"]
+    captured.body.specialCards.map((card: any) => card.code),
+    ["shiny", "hiddenGem", "late", "seasonal"]
   );
+  const lateCard = captured.body.specialCards.find((card: any) => card.code === "late");
+  assert.deepEqual(lateCard.value, {
+    previousPlayedAt: "2024-06-01T10:00:00.000Z",
+    returnedAt: "2026-06-02T10:00:00.000Z",
+    gapDays: 731,
+  });
 });
 
 test("track-story keeps unproven cold-path counts null and does not cache partial proof", async () => {
@@ -932,7 +938,7 @@ test("track-story proves low-play multi-artist counts and ranking without advanc
   assert.match(captured.headers["cache-control"], /s-maxage=300/);
 });
 
-test("track-story emits special and jealous only from positively proven counts", async () => {
+test("track-story emits special without the removed jealous rarity", async () => {
   const ownUserId = USERS.leo.id;
   const friendUserId = Object.values(USERS).find((item) => item.id !== ownUserId)!.id;
   const ownHistory = Array.from({ length: 55 }, (_, index) => ({
@@ -977,8 +983,8 @@ test("track-story emits special and jealous only from positively proven counts",
   } as any, res);
 
   assert.deepEqual(
-    captured.body.specialCards.map((card: any) => card.code).sort(),
-    ["jealous", "special"]
+    captured.body.specialCards.map((card: any) => card.code),
+    ["special"]
   );
   assert.equal(captured.body.coverage.partial, false);
 });

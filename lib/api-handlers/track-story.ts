@@ -25,6 +25,8 @@ const routeMap = {
 } as const;
 
 type EntityKind = keyof typeof routeMap;
+type TrackStorySpecialCode = "shiny" | "hiddenGem" | "special" | "late" | "seasonal";
+type TrackStorySpecialTone = "shine" | "hiddenGem" | "special" | "late" | "seasonal";
 
 type CountRow = {
   key: string;
@@ -376,7 +378,7 @@ async function getTop1kPosition(userId: string, trackId: string, deadline: numbe
   return { position: match ? Number(match.position || items.indexOf(match) + 1) : null, partial: false };
 }
 
-function makeSpecialCard(code: string, label: string, tone: string, detail: string, value?: string | number | null) {
+function makeSpecialCard(code: TrackStorySpecialCode, label: string, tone: TrackStorySpecialTone, detail: string, value?: unknown) {
   return { code, label, tone, detail, value: value ?? null };
 }
 
@@ -469,7 +471,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     specialCards.push(makeSpecialCard("shiny", "SHINY SONG", "shine", "Ouvida no lançamento ou na véspera.", history.firstPlayedAt));
   }
   if (trackCountsComplete && ownTrackCount != null && ownTrackCount > 10 && friendsWithAnyPlay.length === 0) {
-    specialCards.push(makeSpecialCard("treasure", "TREASURE SONG", "treasure", "Mais de 10 plays só seus no círculo.", ownTrackCount));
+    specialCards.push(makeSpecialCard("hiddenGem", "HIDDEN GEM", "hiddenGem", "Mais de 10 plays só seus no círculo.", ownTrackCount));
   }
   if (historyComplete && history.specialSignals.seasonalMonth) {
     specialCards.push(makeSpecialCard("seasonal", "SAZONAL SONG", "seasonal", "Todos os plays caem no mesmo mês.", history.specialSignals.seasonalMonth));
@@ -479,28 +481,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     specialCards.push(makeSpecialCard("special", "SPECIAL SONG", "special", "Só você e mais um amigo passaram de 10 plays.", friendOverTen?.count));
   }
   if (historyComplete && history.specialSignals.maxGapDays > 365) {
-    specialCards.push(makeSpecialCard("late", "THE LATE SONG", "late", "Voltou depois de mais de 1 ano sem tocar.", history.specialSignals.maxGapDays));
+    specialCards.push(makeSpecialCard("late", "THE LATE SONG", "late", "Voltou depois de mais de 1 ano sem tocar.", {
+      previousPlayedAt: history.specialSignals.maxGapStart,
+      returnedAt: history.specialSignals.maxGapEnd,
+      gapDays: history.specialSignals.maxGapDays,
+    }));
   }
 
-  let jealousSignal: any = null;
-  if (ownTrackCount != null && ownTrackCount >= 50 && artistIds.length > 0) {
-    for (const [index, artistId] of artistIds.entries()) {
-      const ownArtistCount = artistCounts[index]?.count;
-      if (typeof ownArtistCount !== "number") continue;
-      const artistGroup = await getEntityStatsForGroup("artist", artistId, deadline, friendUsers);
-      const rival = artistGroup
-        .filter((row): row is CountRow & { count: number } => typeof row.count === "number" && row.count > ownArtistCount)
-        .sort((a, b) => b.count - a.count)[0];
-      if (rival) {
-        jealousSignal = { artistId, ownCount: ownArtistCount, rival };
-        break;
-      }
-    }
-  }
-
-  if (jealousSignal) {
-    specialCards.push(makeSpecialCard("jealous", "JEALOUS SONG", "jealous", "Você domina a faixa, mas um amigo domina um artista dela.", jealousSignal.rival.count));
-  }
+  const specialPriority = new Map<TrackStorySpecialCode, number>([
+    ["shiny", 0],
+    ["hiddenGem", 1],
+    ["special", 2],
+    ["late", 3],
+    ["seasonal", 4],
+  ]);
+  specialCards.sort((left, right) => (
+    (specialPriority.get(left.code) ?? 99) - (specialPriority.get(right.code) ?? 99)
+  ));
 
   const trackCountProven = typeof ownTrackCount === "number";
   const albumCountProven = !albumId || typeof albumCount?.count === "number";
