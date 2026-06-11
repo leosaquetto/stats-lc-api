@@ -46,6 +46,20 @@ function canonicalText(value: unknown) {
     : "";
 }
 
+function canonicalTitleComparableText(value: unknown) {
+  return typeof value === "string"
+    ? value
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/[\(\)\[\]]/g, " ")
+        .replace(/\b(feat|ft|with|prod)\.?\b.*$/i, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+    : "";
+}
+
 function stripLyricsTitleVersion(value: unknown) {
   if (typeof value !== "string") return value;
 
@@ -68,6 +82,10 @@ function canonicalTitleText(value: unknown) {
   return canonicalText(stripLyricsTitleVersion(value));
 }
 
+function canonicalTitleComparable(value: unknown) {
+  return canonicalTitleComparableText(stripLyricsTitleVersion(value));
+}
+
 function cacheKey(title: string, artist: string | null, includeLyrics: boolean, includeWriters: boolean) {
   return `${canonicalTitleText(title)}|${canonicalText(artist)}|lyrics=${includeLyrics ? "1" : "0"}|writers=${includeWriters ? "1" : "0"}`;
 }
@@ -79,13 +97,19 @@ function includesText(value: string, candidate: string) {
 function scoreHit(hit: any, title: string, artist: string | null) {
   const result = hit?.result ?? hit;
   const titleNeedle = canonicalTitleText(title);
+  const comparableTitleNeedle = canonicalTitleComparable(title);
   const artistNeedle = canonicalText(artist);
   const resultTitle = canonicalText(result?.title);
   const resultFullTitle = canonicalText(result?.full_title);
+  const comparableResultTitle = canonicalTitleComparable(result?.title);
+  const comparableResultFullTitle = canonicalTitleComparable(result?.full_title);
   const resultArtist = canonicalText(result?.primary_artist?.name);
 
   let score = 0;
-  if (titleNeedle && resultTitle === titleNeedle) score += 0.6;
+  if (comparableTitleNeedle && comparableResultTitle === comparableTitleNeedle) score += 0.6;
+  else if (titleNeedle && resultTitle === titleNeedle) score += 0.6;
+  else if (includesText(comparableResultTitle, comparableTitleNeedle)) score += 0.48;
+  else if (includesText(comparableResultFullTitle, comparableTitleNeedle)) score += 0.4;
   else if (includesText(resultTitle, titleNeedle)) score += 0.42;
   else if (includesText(resultFullTitle, titleNeedle)) score += 0.34;
 
@@ -96,6 +120,28 @@ function scoreHit(hit: any, title: string, artist: string | null) {
   if (result?.lyrics_state === "complete") score += 0.05;
 
   return Math.min(1, score);
+}
+
+function searchTitleVariants(title: string) {
+  const variants: string[] = [];
+  const addVariant = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (!variants.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+      variants.push(trimmed);
+    }
+  };
+
+  addVariant(title);
+
+  const dashMatch = String(stripLyricsTitleVersion(title)).match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  if (dashMatch) {
+    addVariant(`${dashMatch[1].trim()} (${dashMatch[2].trim()})`);
+  }
+
+  addVariant(stripLyricsSearchSuffix(title));
+
+  return variants;
 }
 
 function normalizeMatch(hit: any, score: number) {
@@ -328,13 +374,14 @@ export async function findGeniusLyricsMatch(
       .map((hit: any) => ({ hit, score: scoreHit(hit, normalizedTitle, normalizedArtist) }))
       .sort((a: any, b: any) => b.score - a.score);
 
-    let hits = await search(normalizedTitle);
-    let winner = rankHits(hits)[0];
-    const simplifiedTitle = stripLyricsSearchSuffix(normalizedTitle);
+    let hits: any[] = [];
+    let winner: { hit: any; score: number } | undefined;
 
-    if ((!winner || winner.score < 0.72) && simplifiedTitle && simplifiedTitle !== normalizedTitle) {
-      hits = [...hits, ...await search(simplifiedTitle)];
+    for (const searchTitle of searchTitleVariants(normalizedTitle)) {
+      const nextHits = await search(searchTitle);
+      hits = [...hits, ...nextHits];
       winner = rankHits(hits)[0];
+      if (winner && winner.score >= 0.72) break;
     }
 
     const result: GeniusLyricsMatch = winner && winner.score >= 0.72

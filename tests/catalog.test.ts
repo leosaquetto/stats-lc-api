@@ -606,6 +606,54 @@ test("lyrics match retries without parenthetical soundtrack source", async () =>
   ]);
 });
 
+test("lyrics match treats dash and parenthetical title versions as equivalent", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+  const queries: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q") || "");
+
+    if (queries.length === 1) {
+      return jsonResponse({ meta: { status: 200 }, response: { hits: [] } });
+    }
+
+    return jsonResponse({
+      meta: { status: 200 },
+      response: {
+        hits: [
+          {
+            result: {
+              id: 14060118,
+              title: "Pecados Como Eu (Amor In Studio)",
+              full_title: "Pecados Como Eu (Amor In Studio) by LUDMILLA & Felipe Amorim",
+              url: "https://genius.com/Ludmilla-and-felipe-amorim-pecados-como-eu-amor-in-studio-lyrics",
+              path: "/Ludmilla-and-felipe-amorim-pecados-como-eu-amor-in-studio-lyrics",
+              lyrics_state: "complete",
+              primary_artist: { name: "LUDMILLA" },
+            },
+          },
+        ],
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "Pecados Como Eu - Amor In Studio", artist: "LUDMILLA & Felipe Amorim" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.id, 14060118);
+  assert.equal(captured.body.match.score, 0.89);
+  assert.deepEqual(queries, [
+    "Pecados Como Eu - Amor In Studio LUDMILLA & Felipe Amorim",
+    "Pecados Como Eu (Amor In Studio) LUDMILLA & Felipe Amorim",
+  ]);
+});
+
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {
   const track = normalizeTrack(referenceFixtures.track);
   const artist = normalizeArtist(referenceFixtures.artist);
