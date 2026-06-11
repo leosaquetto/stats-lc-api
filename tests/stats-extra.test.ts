@@ -1035,6 +1035,124 @@ test("recent album context can replace a soundtrack single with the album versio
   assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/sanctuary/tracks")), true);
 });
 
+test("recent album context can prefer a confirmed expanded album edition", async () => {
+  const urls: URL[] = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    urls.push(url);
+
+    if (url.pathname.endsWith("/albums/til-dawn/tracks")) {
+      return jsonResponse({
+        items: [
+          { track: { id: "til-lavender", name: "Lavender Haze", artists: [{ id: "taylor", name: "Taylor Swift" }], spotifyId: "til-lavender-spotify" } },
+          { track: { id: "til-anti", name: "Anti-Hero", artists: [{ id: "taylor", name: "Taylor Swift" }], spotifyId: "til-anti-spotify" } },
+          { track: { id: "til-maroon", name: "Maroon", artists: [{ id: "taylor", name: "Taylor Swift" }] } },
+          {
+            track: {
+              id: "til-snow-more",
+              name: "Snow On The Beach (feat. More Lana Del Rey)",
+              artists: [
+                { id: "lana", name: "Lana Del Rey" },
+                { id: "taylor", name: "Taylor Swift" },
+              ],
+              appleMusicId: "til-snow-apple",
+            },
+          },
+        ],
+      });
+    }
+
+    if (url.pathname.endsWith("/albums/three-am/tracks")) {
+      return jsonResponse({
+        items: [
+          { track: { id: "three-lavender", name: "Lavender Haze", artists: [{ id: "taylor", name: "Taylor Swift" }] } },
+          { track: { id: "three-anti", name: "Anti-Hero", artists: [{ id: "taylor", name: "Taylor Swift" }] } },
+          { track: { id: "three-snow", name: "Snow On The Beach (feat. Lana Del Rey)", artists: [{ id: "taylor", name: "Taylor Swift" }] } },
+        ],
+      });
+    }
+
+    return jsonResponse({ error: "not_found" }, 404);
+  };
+
+  const tilDawnAlbum = {
+    id: "til-dawn",
+    name: "Midnights (The Til Dawn Edition)",
+    type: "album",
+    totalTracks: 23,
+    image: "https://img.test/til-dawn.jpg",
+    artists: [{ id: "taylor", name: "Taylor Swift" }],
+  };
+  const threeAmAlbum = {
+    id: "three-am",
+    name: "Midnights (3am Edition)",
+    type: "album",
+    totalTracks: 20,
+    image: "https://img.test/three-am.jpg",
+    artists: [{ id: "taylor", name: "Taylor Swift" }],
+  };
+
+  const [snowItem, antiItem, maroonItem, lavenderItem] = await enrichTrackItemsWithAlbumOwners([
+    {
+      track: {
+        id: "current-snow",
+        name: "Snow On The Beach (feat. Lana Del Rey)",
+        artists: [
+          { id: "lana", name: "Lana Del Rey" },
+          { id: "taylor", name: "Taylor Swift" },
+        ],
+        albums: [tilDawnAlbum],
+      },
+    },
+    {
+      track: {
+        id: "current-anti",
+        name: "Anti-Hero",
+        artists: [{ id: "taylor", name: "Taylor Swift" }],
+        albums: [threeAmAlbum],
+      },
+    },
+    {
+      track: {
+        id: "current-maroon",
+        name: "Maroon",
+        artists: [{ id: "taylor", name: "Taylor Swift" }],
+        albums: [tilDawnAlbum],
+      },
+    },
+    {
+      track: {
+        id: "current-lavender",
+        name: "Lavender Haze",
+        artists: [{ id: "taylor", name: "Taylor Swift" }],
+        albums: [threeAmAlbum],
+      },
+    },
+  ], {
+    useTrackStreamEvidence: false,
+  });
+
+  const snowTrack: any = normalizeTopItem(snowItem, "tracks");
+  const antiTrack: any = normalizeTopItem(antiItem, "tracks");
+  const maroonTrack: any = normalizeTopItem(maroonItem, "tracks");
+  const lavenderTrack: any = normalizeTopItem(lavenderItem, "tracks");
+
+  assert.equal(snowTrack.id, "til-snow-more");
+  assert.equal(snowTrack.name, "Snow On The Beach (feat. More Lana Del Rey)");
+  assert.equal(snowTrack.albumId, "til-dawn");
+  assert.equal(snowTrack.appleMusicId, "til-snow-apple");
+  assert.equal(antiTrack.id, "til-anti");
+  assert.equal(antiTrack.albumId, "til-dawn");
+  assert.equal(antiTrack.albumName, "Midnights (The Til Dawn Edition)");
+  assert.equal(antiTrack.albumImage, "https://img.test/til-dawn.jpg");
+  assert.equal(antiTrack.spotifyId, "til-anti-spotify");
+  assert.equal(lavenderTrack.id, "til-lavender");
+  assert.equal(lavenderTrack.albumId, "til-dawn");
+  assert.equal(maroonTrack.id, "til-maroon");
+  assert.equal(maroonTrack.albumId, "til-dawn");
+  assert.equal(urls.some((url) => url.pathname.endsWith("/api/v1/albums/til-dawn/tracks")), true);
+});
+
 test("ownerless albums infer primary artist from album tracks", async () => {
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));

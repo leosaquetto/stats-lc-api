@@ -162,6 +162,12 @@ function getTrackArtistNames(track: any) {
   return [...new Set(names.filter(Boolean).map((name) => canonicalText(name)))];
 }
 
+function hasSharedArtist(left: any, right: any) {
+  const leftNames = new Set(getTrackArtistNames(left));
+  const rightNames = getTrackArtistNames(right);
+  return rightNames.length === 0 || rightNames.some((name) => leftNames.has(name));
+}
+
 function sameArtistContext(track: any, album: any) {
   const albumArtist = canonicalText(getAlbumArtistName(album));
   if (!albumArtist) return false;
@@ -179,6 +185,11 @@ function isAlbumLikeContext(album: any) {
   const type = canonicalText(album?.type);
   const totalTracks = Number(album?.totalTracks ?? album?.total_tracks);
   return type === "album" || totalTracks > 1;
+}
+
+function albumTotalTracks(album: any) {
+  const value = Number(album?.totalTracks ?? album?.total_tracks);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function mergeAlbumIntoTrackItem<T>(item: T, album: any): T {
@@ -216,6 +227,43 @@ function mergeAlbumIntoTrackItem<T>(item: T, album: any): T {
   if ((item as any)?.track) {
     return {
       ...(item as any),
+      track: enrichedTrack,
+    };
+  }
+
+  return enrichedTrack as T;
+}
+
+function mergeCatalogTrackIntoItem<T>(item: T, album: any, catalogTrack: any): T {
+  const albumEnriched = mergeAlbumIntoTrackItem(item, album) as any;
+  const track = getTrackValue(albumEnriched);
+  if (!track || !catalogTrack) return albumEnriched as T;
+
+  const catalogExternalIds = normalizeExternalIds(catalogTrack);
+  const spotifyId = catalogTrack.spotifyId ?? catalogExternalIds.spotify[0] ?? track.spotifyId ?? null;
+  const appleMusicId = catalogTrack.appleMusicId ?? catalogExternalIds.appleMusic[0] ?? track.appleMusicId ?? null;
+  const artists = Array.isArray(catalogTrack.artists) && catalogTrack.artists.length > 0
+    ? catalogTrack.artists
+    : track.artists;
+
+  const enrichedTrack = {
+    ...track,
+    id: catalogTrack.id ?? track.id,
+    name: catalogTrack.name ?? track.name,
+    durationMs: catalogTrack.durationMs ?? catalogTrack.duration_ms ?? track.durationMs,
+    explicit: catalogTrack.explicit ?? track.explicit,
+    spotifyPreview: catalogTrack.spotifyPreview ?? track.spotifyPreview,
+    appleMusicPreview: catalogTrack.appleMusicPreview ?? track.appleMusicPreview,
+    image: catalogTrack.image ?? album?.image ?? track.image,
+    artists,
+    spotifyId,
+    appleMusicId,
+    externalIds: catalogTrack.externalIds ?? track.externalIds,
+  };
+
+  if (albumEnriched?.track) {
+    return {
+      ...albumEnriched,
       track: enrichedTrack,
     };
   }
@@ -296,32 +344,54 @@ async function enrichTracksWithAppleMusicOwners<T>(
   });
 }
 
-async function fetchAlbumTrackTitleKeys(albumId: string, options: FetchOptions) {
+async function fetchAlbumTrackMatches(albumId: string, options: FetchOptions) {
   const result = await statsfmFetch(`/albums/${encodeSegment(albumId)}/tracks?limit=100`, {
     force: options.force,
     cacheProfile: options.cacheProfile,
     requestTimeoutMs: Math.min(options.requestTimeoutMs ?? 1000, 1000),
   });
 
-  if (!result.ok) return new Set<string>();
+  if (!result.ok) return new Map<string, any>();
 
-  const keys = new Set<string>();
+  const matches = new Map<string, any>();
   for (const item of Array.isArray((result.data as any)?.items) ? (result.data as any).items : []) {
     const track = getTrackValue(item);
     const key = canonicalTrackTitle(track?.name);
-    if (key) keys.add(key);
+    if (key && !matches.has(key)) matches.set(key, track);
   }
-  return keys;
+  return matches;
 }
 
-async function enrichSingleTracksWithRecentAlbumContext<T>(
+async function enrichTracksWithRecentAlbumContext<T>(
   items: T[],
   options: FetchOptions
 ): Promise<T[]> {
   const sourceItems = Array.isArray(items) ? items : [];
-  const contextAlbums = sourceItems
-    .map((item: any) => getTrackAlbum(getTrackValue(item)))
-    .filter(isAlbumLikeContext);
+  const albumCandidates = new Map<string, { album: any; count: number; firstIndex: number }>();
+
+  sourceItems.forEach((item: any, index) => {
+    const album = getTrackAlbum(getTrackValue(item));
+    if (!isAlbumLikeContext(album)) return;
+
+    const id = albumIdForDetail(album);
+    if (!id) return;
+
+    const current = albumCandidates.get(id);
+    if (current) {
+      current.count += 1;
+      return;
+    }
+
+    albumCandidates.set(id, { album, count: 1, firstIndex: index });
+  });
+
+  const contextAlbums = [...albumCandidates.values()]
+    .sort((left, right) =>
+      right.count - left.count ||
+      albumTotalTracks(right.album) - albumTotalTracks(left.album) ||
+      left.firstIndex - right.firstIndex
+    )
+    .map((entry) => entry.album);
 
   if (contextAlbums.length === 0) return sourceItems;
 
@@ -331,40 +401,59 @@ async function enrichSingleTracksWithRecentAlbumContext<T>(
     if (id && !contextAlbumById.has(id)) contextAlbumById.set(id, album);
   }
 
-  const singleCandidates = sourceItems.filter((item: any) => {
+  const replacementCandidates = sourceItems.filter((item: any) => {
     const track = getTrackValue(item);
     const album = getTrackAlbum(track);
-    return Boolean(track && album && isSingleLikeAlbum(album) && canonicalTrackTitle(track?.name));
+    return Boolean(track && album && canonicalTrackTitle(track?.name));
   });
 
-  if (singleCandidates.length === 0) return sourceItems;
+  if (replacementCandidates.length === 0) return sourceItems;
 
   const albumIds = [...contextAlbumById.keys()].slice(0, 4);
-  const trackKeysByAlbumId = new Map<string, Set<string>>();
+  const trackMatchesByAlbumId = new Map<string, Map<string, any>>();
   await mapWithConcurrency(albumIds, 2, async (albumId) => {
-    trackKeysByAlbumId.set(albumId, await fetchAlbumTrackTitleKeys(albumId, options));
+    trackMatchesByAlbumId.set(albumId, await fetchAlbumTrackMatches(albumId, options));
   });
 
-  if (trackKeysByAlbumId.size === 0) return sourceItems;
+  if (trackMatchesByAlbumId.size === 0) return sourceItems;
 
   return sourceItems.map((item: any) => {
     const track = getTrackValue(item);
     const album = getTrackAlbum(track);
-    if (!track || !album || !isSingleLikeAlbum(album)) return item;
+    if (!track || !album) return item;
 
     const titleKey = canonicalTrackTitle(track?.name);
     if (!titleKey) return item;
 
-    const matchedAlbum = albumIds
-      .map((albumId) => contextAlbumById.get(albumId))
-      .find((candidateAlbum) => {
+    const matched = albumIds
+      .map((candidateAlbumId) => {
+        const candidateAlbum = contextAlbumById.get(candidateAlbumId);
         const albumId = albumIdForDetail(candidateAlbum);
-        return albumId &&
-          sameArtistContext(track, candidateAlbum) &&
-          trackKeysByAlbumId.get(albumId)?.has(titleKey);
-      });
+        const catalogTrack = albumId ? trackMatchesByAlbumId.get(albumId)?.get(titleKey) : null;
 
-    return matchedAlbum ? mergeAlbumIntoTrackItem(item, matchedAlbum) : item;
+        return albumId && catalogTrack &&
+          sameArtistContext(track, candidateAlbum) &&
+          hasSharedArtist(track, catalogTrack)
+          ? { album: candidateAlbum, track: catalogTrack }
+          : null;
+      })
+      .find(Boolean);
+
+    if (!matched) return item;
+
+    const currentAlbumId = albumIdForDetail(album);
+    const matchedAlbumId = albumIdForDetail(matched.album);
+    const sameAlbum = Boolean(currentAlbumId && matchedAlbumId && currentAlbumId === matchedAlbumId);
+    const shouldReplace =
+      sameAlbum ||
+      isSingleLikeAlbum(album) ||
+      (
+        isAlbumLikeContext(album) &&
+        isAlbumLikeContext(matched.album) &&
+        albumTotalTracks(matched.album) >= albumTotalTracks(album)
+      );
+
+    return shouldReplace ? mergeCatalogTrackIntoItem(item, matched.album, matched.track) : item;
   });
 }
 
@@ -637,7 +726,7 @@ export async function enrichTrackItemsWithAlbumOwners<T>(
     ? enrichTopTracksWithAlbumOwners(streamEnriched, options.albumItems)
     : streamEnriched;
 
-  const contextEnriched = await enrichSingleTracksWithRecentAlbumContext(lookupEnriched as T[], options);
+  const contextEnriched = await enrichTracksWithRecentAlbumContext(lookupEnriched as T[], options);
   const appleMusicEnriched = await enrichTracksWithAppleMusicOwners(contextEnriched as T[], options);
 
   const albumIds = [
