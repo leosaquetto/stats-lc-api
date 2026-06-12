@@ -330,6 +330,8 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
 
   const playedCount = totalCount || times.length;
   const monthKeys = [...months.keys()].filter((month) => month > 0);
+  const playedYears = new Set([...years.keys()].filter((year) => year > 0));
+  const hasRecurringSeasonalMonth = playedCount >= 3 && monthKeys.length === 1 && playedYears.size >= 2;
 
   return {
     count: playedCount,
@@ -353,7 +355,7 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
         }
       : null,
     specialSignals: {
-      seasonalMonth: playedCount >= 3 && monthKeys.length === 1 ? monthKeys[0] : null,
+      seasonalMonth: hasRecurringSeasonalMonth ? monthKeys[0] : null,
       maxGapDays,
       maxGapStart: maxGapStart ? new Date(maxGapStart).toISOString() : null,
       maxGapEnd: maxGapEnd ? new Date(maxGapEnd).toISOString() : null,
@@ -474,7 +476,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     specialCards.push(makeSpecialCard("hiddenGem", "HIDDEN GEM", "hiddenGem", "Mais de 10 plays só seus no círculo.", ownTrackCount));
   }
   if (historyComplete && history.specialSignals.seasonalMonth) {
-    specialCards.push(makeSpecialCard("seasonal", "SAZONAL SONG", "seasonal", "Todos os plays caem no mesmo mês.", history.specialSignals.seasonalMonth));
+    specialCards.push(makeSpecialCard("seasonal", "SAZONAL SONG", "seasonal", "Esse mês voltou em anos diferentes.", history.specialSignals.seasonalMonth));
   }
   if (trackCountsComplete && ownTrackCount != null && ownTrackCount > 10 && overTenListeners.length === 2 && overTenListeners.some((row) => row.id === userId)) {
     const friendOverTen = overTenListeners.find((row) => row.id !== userId);

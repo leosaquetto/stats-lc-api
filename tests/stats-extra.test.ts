@@ -881,6 +881,46 @@ test("track-story keeps unproven cold-path counts null and does not cache partia
   assert.equal(captured.headers["cache-control"], "no-store");
 });
 
+test("track-story does not mark a one-year month cluster as seasonal", async () => {
+  const ownUserId = USERS.leo.id;
+  const ownHistory = [
+    "2026-07-09T20:03:00.000Z",
+    "2026-07-10T20:30:00.000Z",
+    "2026-07-11T20:50:00.000Z",
+    "2026-07-12T21:10:00.000Z",
+  ].map((endTime) => ({ endTime, track: { id: "one-year-month", name: "One Year Month" } }));
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    const path = decodeURIComponent(url.pathname);
+
+    if (path.endsWith("/streams/tracks/one-year-month/stats")) {
+      return jsonResponse({ items: { count: path.includes(ownUserId) ? 4 : 0, durationMs: 720000 } });
+    }
+    if (path.includes("/streams/tracks/one-year-month")) {
+      if (!path.includes(ownUserId)) return jsonResponse({ items: [] });
+      return jsonResponse({ items: url.searchParams.get("order") === "asc" ? [ownHistory[0]] : ownHistory });
+    }
+    if (path.endsWith("/top/tracks")) return jsonResponse({ items: [] });
+    return jsonResponse({ items: [] });
+  };
+
+  const { res, captured } = createResponseCapture();
+  await trackStoryHandler({
+    query: {
+      user: "leo",
+      track: "one-year-month",
+      album: "album-1",
+      artists: "artist-1",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.coverage.partial, false);
+  assert.equal(captured.body.counts.track, 4);
+  assert.equal(captured.body.specialCards.some((card: any) => card.code === "seasonal"), false);
+});
+
 test("track-story proves low-play multi-artist counts and ranking without advanced metrics", async () => {
   const ownUserId = USERS.leo.id;
   const friendUserId = Object.values(USERS).find((item) => item.id !== ownUserId)!.id;
