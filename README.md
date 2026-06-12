@@ -35,6 +35,8 @@ avulso como substituto do comando suportado pelo repo.
 
 - Manter payloads publicos retrocompativeis.
 - `/api/group-live?profile=0` e a superficie leve de polling.
+- `/api/live-probe?user=<usuario>` e a superficie `pulse` minima para detectar
+  uma nova faixa do usuario destacado sem consultar o grupo inteiro.
 - `/api/group-activity` preenche a Atividade do Circulo com a ultima linha do
   historico completo de cada membro, sem competir com o polling live.
 - `/api/group-live?statsUser=<usuario>` pode acrescentar `featuredStats` sem
@@ -63,10 +65,15 @@ Comportamento atual:
 
 - `/api/group-live`: deadline de 1,9 s, timeout curto por usuario e resposta
   parcial segura.
+- `/api/live-probe`: cache upstream `pulse` de 5 s fresh e ate 45 s stale
+  somente como fallback de falha.
 - `/api/group`: cache CDN de 180 s e stale-while-revalidate de 900 s.
 - cache upstream frio: 3 min fresh e 15 min stale.
 - `/api/top`: faixas upstream vazias retornam `200`, lista vazia e warning.
 - headers de diagnostico: `X-Request-Id`, `Server-Timing` e `X-App-Timing`.
+- Web Push de Orbits usa `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e, quando
+  definido, `VAPID_SUBJECT`; subscriptions e entregas idempotentes usam o
+  Postgres/Neon existente.
 
 Snapshots de producao ficam em
 [`docs/api-contract.md`](./docs/api-contract.md). Eles ajudam a detectar

@@ -12,8 +12,10 @@ import groupLiveHandler from "../lib/api-handlers/group-live.js";
 import groupHandler from "../lib/api-handlers/group.js";
 import healthHandler from "../lib/api-handlers/health.js";
 import latestDiscoveryHandler from "../lib/api-handlers/latest-discovery.js";
+import liveProbeHandler from "../lib/api-handlers/live-probe.js";
 import lyricsHandler from "../lib/api-handlers/lyrics.js";
 import orbitsHandler from "../lib/api-handlers/orbits.js";
+import pushHandler from "../lib/api-handlers/push.js";
 import recentHandler from "../lib/api-handlers/recent.js";
 import replayHandler from "../lib/api-handlers/replay.js";
 import searchHandler from "../lib/api-handlers/search.js";
@@ -45,8 +47,12 @@ const ROUTES: Record<string, Handler> = {
   group: groupHandler,
   health: healthHandler,
   "latest-discovery": latestDiscoveryHandler,
+  "live-probe": liveProbeHandler,
   lyrics: lyricsHandler,
   orbits: orbitsHandler,
+  "push/public-key": pushHandler,
+  "push/subscribe": pushHandler,
+  "push/unsubscribe": pushHandler,
   recent: recentHandler,
   replay: replayHandler,
   search: searchHandler,
@@ -129,6 +135,9 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
       req.query.id = routeId;
       req.query.pathAction = routeAction || "";
     }
+  }
+  if (routeName === "push" && routeId) {
+    req.query.action = routeId;
   }
 
   const route = ROUTES[routePath] || ROUTES[routeName];

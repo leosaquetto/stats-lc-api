@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { readQueryString, setCacheHeaders } from "../api-helpers.js";
 import { normalizeTrack } from "../normalize.js";
 import { orbitStore, usingDurableOrbitStore, type Orbit, type OrbitBox } from "../orbits-store.js";
+import { sendOrbitPush } from "../push-service.js";
 import { fetchUserEntityStreams } from "../user-streams-service.js";
 import { USERS, resolveUserId } from "../users.js";
 
@@ -91,6 +92,19 @@ const checkOrbitListens = async (orbit: Orbit) => {
   return orbit;
 };
 
+const safelySendOrbitPush = async (orbit: Orbit, event: "received" | "listened") => {
+  try {
+    await sendOrbitPush(orbit, event);
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: "orbit_push_dispatch_failed",
+      orbitId: orbit.id,
+      pushEvent: event,
+      message: error?.message || String(error),
+    }));
+  }
+};
+
 const sendOrbitList = async (req: VercelRequest, res: VercelResponse) => {
   const user = readQueryString(req.query.user);
   const box = readQueryString(req.query.box || "received") as OrbitBox;
@@ -140,6 +154,7 @@ const createOrbit = async (req: VercelRequest, res: VercelResponse) => {
   };
 
   const savedOrbit = await orbitStore.create(orbit);
+  await safelySendOrbitPush(savedOrbit, "received");
   setCacheHeaders(res, 0, true);
   return res.status(201).json({ ok: true, durable: usingDurableOrbitStore(), orbit: savedOrbit });
 };
@@ -166,7 +181,12 @@ const updateOrbit = async (req: VercelRequest, res: VercelResponse, action: stri
   } else if (action === "delete-received") {
     orbit.recipientDeletedAt = now;
   } else if (action === "check-listens") {
+    const wasListened = orbit.listenCountSinceSent > 0 || orbit.status === "listened";
     await checkOrbitListens(orbit);
+    const isListened = orbit.listenCountSinceSent > 0 || orbit.status === "listened";
+    if (!wasListened && isListened) {
+      await safelySendOrbitPush(orbit, "listened");
+    }
   }
 
   const savedOrbit = await orbitStore.save(orbit);

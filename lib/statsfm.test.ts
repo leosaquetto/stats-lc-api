@@ -72,6 +72,31 @@ test("live cache profile expires faster than the default cache", async () => {
   assert.equal(getStatsfmHealthSnapshot().cacheProfiles.live.total, 1);
 });
 
+test("pulse cache profile refreshes after five seconds and deduplicates requests", async () => {
+  __setStatsfmNowForTests(1_000);
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse({ item: { version: calls } });
+  };
+
+  const [first, deduped] = await Promise.all([
+    statsfmFetch("/users/leo/streams/recent?limit=1", { cacheProfile: "pulse" }),
+    statsfmFetch("/users/leo/streams/recent?limit=1", { cacheProfile: "pulse" }),
+  ]);
+  __setStatsfmNowForTests(6_001);
+  const refreshed = await statsfmFetch("/users/leo/streams/recent?limit=1", {
+    cacheProfile: "pulse",
+  });
+
+  assert.equal(first.ok, true);
+  assert.deepEqual(deduped.data, first.data);
+  assert.equal(refreshed.ok, true);
+  assert.equal(calls, 2);
+  assert.equal(getStatsfmHealthSnapshot().cacheProfiles.pulse.total, 1);
+});
+
 test("default cache keeps the existing one minute fresh window", async () => {
   __setStatsfmNowForTests(1_000);
   let calls = 0;

@@ -9,6 +9,8 @@ const RETRY_DELAY_MS = 300;
 const MAX_RETRIES = 1;
 const LIVE_FRESH_TTL_MS = 20_000;
 const LIVE_STALE_TTL_MS = 45_000;
+const PULSE_FRESH_TTL_MS = 5_000;
+const PULSE_STALE_TTL_MS = 45_000;
 const REPLAY_FRESH_TTL_MS = 5 * 60_000;
 const REPLAY_STALE_TTL_MS = 10 * 60_000;
 const HEAVY_FRESH_TTL_MS = 15 * 60_000;
@@ -25,7 +27,7 @@ export type StatsfmResult = {
 };
 
 type AggregateMode = "auto" | "none";
-type CacheProfile = "default" | "live" | "replay" | "heavy";
+type CacheProfile = "default" | "live" | "pulse" | "replay" | "heavy";
 
 type StatsfmFetchOptions = {
   force?: boolean;
@@ -195,6 +197,16 @@ function getCacheConfigForOptions(options?: StatsfmFetchOptions): FetchCacheConf
       freshTtlMs: LIVE_FRESH_TTL_MS,
       staleTtlMs: LIVE_STALE_TTL_MS,
       cacheProfile: "live",
+      scope: "path",
+      segmentKind: null,
+    };
+  }
+
+  if (options?.cacheProfile === "pulse") {
+    return {
+      freshTtlMs: PULSE_FRESH_TTL_MS,
+      staleTtlMs: PULSE_STALE_TTL_MS,
+      cacheProfile: "pulse",
       scope: "path",
       segmentKind: null,
     };
@@ -668,6 +680,7 @@ export function getStatsfmHealthSnapshot() {
     }));
   const monthlySegmentEntries = [...cache.entries()].filter(([, entry]) => entry.scope === "monthly_segment");
   const liveEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "live");
+  const pulseEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "pulse");
   const replayEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "replay");
   const heavyEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "heavy");
   const defaultEntries = [...cache.entries()].filter(([, entry]) => entry.cacheProfile === "default");
@@ -693,6 +706,11 @@ export function getStatsfmHealthSnapshot() {
         total: liveEntries.length,
         fresh: liveEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
         stale: liveEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
+      },
+      pulse: {
+        total: pulseEntries.length,
+        fresh: pulseEntries.filter(([, entry]) => entry.expiresAt > timestamp).length,
+        stale: pulseEntries.filter(([, entry]) => entry.expiresAt <= timestamp && entry.staleUntil > timestamp).length,
       },
       replay: {
         total: replayEntries.length,
@@ -724,6 +742,8 @@ export function getStatsfmHealthSnapshot() {
       maxRetries: MAX_RETRIES,
       liveFreshTtlMs: LIVE_FRESH_TTL_MS,
       liveStaleTtlMs: LIVE_STALE_TTL_MS,
+      pulseFreshTtlMs: PULSE_FRESH_TTL_MS,
+      pulseStaleTtlMs: PULSE_STALE_TTL_MS,
       replayFreshTtlMs: REPLAY_FRESH_TTL_MS,
       replayStaleTtlMs: REPLAY_STALE_TTL_MS,
       heavyFreshTtlMs: HEAVY_FRESH_TTL_MS,

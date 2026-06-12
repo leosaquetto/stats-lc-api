@@ -6,6 +6,9 @@ import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
 import groupActivityHandler from "../lib/api-handlers/group-activity.ts";
 import groupLiveHandler from "../lib/api-handlers/group-live.ts";
 import latestDiscoveryHandler from "../lib/api-handlers/latest-discovery.ts";
+import liveProbeHandler from "../lib/api-handlers/live-probe.ts";
+import pushHandler from "../lib/api-handlers/push.ts";
+import { pushStore } from "../lib/push-store.ts";
 import replayHandler from "../lib/api-handlers/replay.ts";
 import statsCardinalityHandler from "../lib/api-handlers/stats-cardinality.ts";
 import statsDatesHandler from "../lib/api-handlers/stats-dates.ts";
@@ -293,6 +296,84 @@ test("group-live returns lightweight live members with normalized nowPlaying", a
   assert.equal(captured.body.members[0].nowPlaying.timestamp, "2026-05-22T22:00:00.000Z");
   assert.equal(captured.body.members[0].nowPlaying.playbackKey, "stream-1");
   assert.equal(captured.body.members[0].nowPlaying.platformCandidate.primary, "spotify");
+});
+
+test("live-probe fetches only the latest stream and returns a stable minimal signature", async () => {
+  const requestedPaths: string[] = [];
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    requestedPaths.push(url.pathname);
+    return jsonResponse({
+      items: [{
+        id: "probe-stream",
+        endTime: "2026-06-12T10:00:00.000Z",
+        track: {
+          id: "probe-track",
+          name: "Probe Song",
+          artists: [{ id: "artist-1", name: "Artist" }],
+          albums: [{ id: "probe-album", name: "Probe Album", image: "https://img.test/probe.jpg" }],
+          durationMs: 180000,
+        },
+      }],
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+  await liveProbeHandler({ method: "GET", query: { user: "leo" } } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.user, "leo");
+  assert.equal(captured.body.userId, USERS.leo.id);
+  assert.equal(captured.body.item.track.name, "Probe Song");
+  assert.equal(
+    captured.body.signature,
+    "2026-06-12T10:00:00.000Z:probe-track:probe-album"
+  );
+  assert.deepEqual(requestedPaths, [`/api/v1/users/${encodeURIComponent(USERS.leo.id)}/streams/recent`]);
+  assert.equal(captured.body.item.track.album.name, "Probe Album");
+  assert.equal(captured.body.item.track.externalIds, undefined);
+  assert.equal(captured.body.item.rawAvailableKeys, undefined);
+  assert.equal(captured.headers["cache-control"], "public, s-maxage=3, stale-if-error=45");
+});
+
+test("push subscription endpoint validates known members and subscription keys", async () => {
+  const { res, captured } = createResponseCapture();
+  await pushHandler({
+    method: "POST",
+    query: { action: "subscribe" },
+    body: {
+      userId: "leo",
+      subscription: {
+        endpoint: "https://push.test/subscription",
+        expirationTime: null,
+        keys: { p256dh: "key", auth: "auth" },
+      },
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.ok, true);
+});
+
+test("push store upserts duplicate endpoints, unsubscribes, and claims deliveries once", async () => {
+  const endpoint = `https://push.test/${Date.now()}`;
+  const first = {
+    userId: USERS.leo.id,
+    endpoint,
+    expirationTime: null,
+    keys: { p256dh: "p256dh", auth: "auth" },
+  };
+  await pushStore.upsert(first);
+  await pushStore.upsert({ ...first, keys: { p256dh: "updated", auth: "updated-auth" } });
+
+  const stored = (await pushStore.listByUser(USERS.leo.id)).find(item => item.endpoint === endpoint);
+  assert.equal(stored?.keys.p256dh, "updated");
+
+  const orbitId = `orbit-${Date.now()}`;
+  assert.equal(await pushStore.claimDelivery(orbitId, "received", USERS.leo.id), true);
+  assert.equal(await pushStore.claimDelivery(orbitId, "received", USERS.leo.id), false);
+  assert.equal(await pushStore.remove(endpoint), true);
+  assert.equal((await pushStore.listByUser(USERS.leo.id)).some(item => item.endpoint === endpoint), false);
 });
 
 test("group-live uses stream album id to correct live now track album", async () => {
