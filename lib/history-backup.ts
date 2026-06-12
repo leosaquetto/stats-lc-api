@@ -2,10 +2,16 @@ import { createHash } from "node:crypto";
 import { buildQuery, encodeSegment, getItems } from "./api-helpers.js";
 import { getCount, statsfmFetch, type StatsfmResult } from "./statsfm.js";
 import { TIMEZONE_SP } from "./time.js";
-import { historyStore, type HistoryMonthStatus, type StreamHistoryEvent } from "./history-store.js";
+import {
+  historyStore,
+  type HistoryMonthStatus,
+  type HistoryUserState,
+  type StreamHistoryEvent,
+  type StreamMonthBackup,
+} from "./history-store.js";
 import { getUsersList } from "./users.js";
 
-type HistoryUser = {
+export type HistoryUser = {
   key: string;
   id: string;
   platform?: string;
@@ -38,9 +44,11 @@ export type HistoryBackupResult = HistoryMonth & {
   errors: string[];
 };
 
-type HistoryFetchers = {
+export type HistoryFetchers = {
   fetchStats(userId: string, month: HistoryMonth): Promise<StatsfmResult>;
   fetchStreams(userId: string, month: HistoryMonth, limit: number, beforeMs: number): Promise<StatsfmResult>;
+  fetchProfile?(userId: string): Promise<StatsfmResult>;
+  fetchLatestStream?(userId: string): Promise<StatsfmResult>;
 };
 
 type HistoryStore = {
@@ -65,15 +73,47 @@ type HistoryStore = {
     status: HistoryMonthStatus;
     error?: string | null;
   }): Promise<unknown>;
+  listMonths?(userKey?: string): Promise<StreamMonthBackup[]>;
+  getLatestEventMs?(userKey: string): Promise<number | null>;
+  getUserState?(userKey: string): Promise<HistoryUserState | null>;
+  upsertUserState?(input: Omit<HistoryUserState, "createdAt" | "updatedAt">): Promise<HistoryUserState>;
 };
 
 export type HistoryBackupOptions = {
   pageSize?: number;
   fetchers?: HistoryFetchers;
   store?: HistoryStore;
+  referenceMs?: number;
+  statsResult?: StatsfmResult;
+  coveragePolicy?: {
+    latestUpstreamEventMs: number | null;
+    hasImported: boolean | null;
+  };
+};
+
+export type WeeklyHistoryMaintenanceResult = {
+  userKey: string;
+  userId: string;
+  pendingFromMs: number;
+  nextPendingFromMs: number;
+  latestEventAtMs: number | null;
+  latestAdvanced: boolean;
+  fullBackfill: boolean;
+  hasImported: boolean | null;
+  syncEnabled: boolean | null;
+  checkedMonths: number;
+  reconciledMonths: string[];
+  changedMonths: string[];
+  results: HistoryBackupResult[];
+};
+
+export type WeeklyHistoryMaintenanceOptions = HistoryBackupOptions & {
+  referenceMs?: number;
 };
 
 const DEFAULT_PAGE_SIZE = 10000;
+const DEFAULT_HISTORY_START_MONTH = "2016-01";
+const HISTORY_OVERLAP_MONTHS = 2;
 const MONTH_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: TIMEZONE_SP,
   year: "numeric",
@@ -137,10 +177,25 @@ export function createHistoryMonth(year: number, month: number): HistoryMonth {
   return { year, month, afterMs, beforeMs };
 }
 
+export function currentHistoryMonth(referenceMs = Date.now()) {
+  const current = getMonthParts(referenceMs);
+  return createHistoryMonth(current.year, current.month);
+}
+
 export function previousClosedHistoryMonth(referenceMs = Date.now()) {
   const current = getMonthParts(referenceMs);
   const previous = previousMonth(current.year, current.month);
   return createHistoryMonth(previous.year, previous.month);
+}
+
+export function shiftHistoryMonth(month: HistoryMonth, offset: number) {
+  const shifted = new Date(Date.UTC(month.year, month.month - 1 + offset, 1));
+  return createHistoryMonth(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1);
+}
+
+export function historyMonthFromTimestamp(timestamp: number) {
+  const parts = getMonthParts(timestamp);
+  return createHistoryMonth(parts.year, parts.month);
 }
 
 export function listHistoryMonths(from: HistoryMonth, to: HistoryMonth) {
@@ -187,6 +242,21 @@ function defaultFetchers(): HistoryFetchers {
         { force: false, cacheProfile: "heavy", requestTimeoutMs: 8000, maxRetries: 1 }
       );
     },
+    fetchProfile(userId) {
+      return statsfmFetch(`/users/${encodeSegment(userId)}`, {
+        force: false,
+        requestTimeoutMs: 8000,
+        maxRetries: 1,
+      });
+    },
+    fetchLatestStream(userId) {
+      return statsfmFetch(`/users/${encodeSegment(userId)}/streams?limit=1`, {
+        force: false,
+        cacheProfile: "heavy",
+        requestTimeoutMs: 8000,
+        maxRetries: 1,
+      });
+    },
   };
 }
 
@@ -198,6 +268,25 @@ function readTimestamp(stream: any) {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function readProfileSyncState(data: unknown) {
+  const profile: any = (data as any)?.item ?? data ?? {};
+  const auth = profile?.appleMusicAuth ?? profile?.spotifyAuth ?? {};
+  return {
+    hasImported:
+      typeof profile?.hasImported === "boolean"
+        ? profile.hasImported
+        : typeof auth?.imported === "boolean"
+          ? auth.imported
+          : null,
+    syncEnabled:
+      typeof profile?.syncEnabled === "boolean"
+        ? profile.syncEnabled
+        : typeof auth?.sync === "boolean"
+          ? auth.sync
+          : null,
+  };
 }
 
 function readId(value: unknown) {
@@ -287,6 +376,28 @@ export async function estimateHistoryMonths(
   return rows;
 }
 
+function resolveBackupStatus(input: {
+  month: HistoryMonth;
+  referenceMs: number;
+  expectedCount: number;
+  storedCount: number;
+  errors: string[];
+  coveragePolicy?: HistoryBackupOptions["coveragePolicy"];
+}): HistoryMonthStatus {
+  if (input.errors.length > 0 || input.storedCount < input.expectedCount) return "partial";
+  if (input.storedCount > input.expectedCount) return "needs_review";
+  if (!input.coveragePolicy) return "complete";
+  if (input.referenceMs >= input.month.afterMs && input.referenceMs < input.month.beforeMs) return "open";
+  if (input.coveragePolicy.hasImported === false && input.expectedCount === 0) return "awaiting_sync";
+  if (
+    input.coveragePolicy.latestUpstreamEventMs == null
+    || input.coveragePolicy.latestUpstreamEventMs < input.month.beforeMs
+  ) {
+    return "awaiting_sync";
+  }
+  return "complete";
+}
+
 export async function backupHistoryMonth(
   user: HistoryUser,
   month: HistoryMonth,
@@ -295,9 +406,14 @@ export async function backupHistoryMonth(
   const fetchers = options.fetchers ?? defaultFetchers();
   const store = options.store ?? historyStore;
   const pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
+  const referenceMs = options.referenceMs ?? Date.now();
   const errors: string[] = [];
+  const fetchBeforeMs = Math.min(month.beforeMs, referenceMs + 1);
+  const fetchMonth = fetchBeforeMs === month.beforeMs
+    ? month
+    : { ...month, beforeMs: fetchBeforeMs };
 
-  const stats = await fetchers.fetchStats(user.id, month);
+  const stats = options.statsResult ?? await fetchers.fetchStats(user.id, fetchMonth);
   if (!stats.ok) {
     throw new Error(`Stats request failed for ${user.key} ${monthKey(month)} (${stats.status})`);
   }
@@ -315,11 +431,11 @@ export async function backupHistoryMonth(
 
   let fetchedCount = 0;
   let skippedCount = 0;
-  let cursorBeforeMs = month.beforeMs - 1;
+  let cursorBeforeMs = fetchBeforeMs - 1;
   const maxPages = Math.max(1, Math.ceil(expectedCount / pageSize) + 2);
 
   for (let page = 0; page < maxPages && cursorBeforeMs >= month.afterMs; page += 1) {
-    const result = await fetchers.fetchStreams(user.id, month, pageSize, cursorBeforeMs);
+    const result = await fetchers.fetchStreams(user.id, fetchMonth, pageSize, cursorBeforeMs);
     if (!result.ok) {
       errors.push(`streams page before=${cursorBeforeMs} status=${result.status}`);
       break;
@@ -347,11 +463,14 @@ export async function backupHistoryMonth(
   }
 
   const storedCount = await store.countEventsForMonth(user.key, month.afterMs, month.beforeMs);
-  const status: HistoryMonthStatus = errors.length > 0 || storedCount < expectedCount
-    ? expectedCount === 0 || storedCount === expectedCount
-      ? "complete"
-      : "partial"
-    : "complete";
+  const status = resolveBackupStatus({
+    month,
+    referenceMs,
+    expectedCount,
+    storedCount,
+    errors,
+    coveragePolicy: options.coveragePolicy,
+  });
 
   await store.finishMonth({
     userKey: user.key,
@@ -386,4 +505,210 @@ export async function backupHistoryRange(
     results.push(await backupHistoryMonth(user, month, options));
   }
   return results;
+}
+
+function requireMaintenanceStore(store: HistoryStore) {
+  if (
+    !store.listMonths
+    || !store.getLatestEventMs
+    || !store.getUserState
+    || !store.upsertUserState
+  ) {
+    throw new Error("History store does not support weekly maintenance state");
+  }
+  return store as HistoryStore & Required<Pick<
+    HistoryStore,
+    "listMonths" | "getLatestEventMs" | "getUserState" | "upsertUserState"
+  >>;
+}
+
+function clampPendingMonth(month: HistoryMonth, current: HistoryMonth) {
+  return month.afterMs > current.afterMs ? current : month;
+}
+
+export async function maintainWeeklyHistoryUser(
+  user: HistoryUser,
+  options: WeeklyHistoryMaintenanceOptions = {}
+): Promise<WeeklyHistoryMaintenanceResult> {
+  const defaults = defaultFetchers();
+  const fetchers: HistoryFetchers = {
+    ...defaults,
+    ...(options.fetchers ?? {}),
+  };
+  const store = requireMaintenanceStore(options.store ?? historyStore);
+  const referenceMs = options.referenceMs ?? Date.now();
+  const currentMonth = currentHistoryMonth(referenceMs);
+  const checkedAt = new Date(referenceMs).toISOString();
+
+  const [existingMonths, storedLatestEventMs, previousState, profileResult, latestResult] = await Promise.all([
+    store.listMonths(user.key),
+    store.getLatestEventMs(user.key),
+    store.getUserState(user.key),
+    fetchers.fetchProfile!(user.id),
+    fetchers.fetchLatestStream!(user.id),
+  ]);
+
+  const profileState = profileResult.ok
+    ? readProfileSyncState(profileResult.data)
+    : {
+        hasImported: previousState?.hasImported ?? null,
+        syncEnabled: previousState?.syncEnabled ?? null,
+      };
+  const latestStream = latestResult.ok ? getItems(latestResult.data)[0] ?? null : null;
+  const upstreamLatestEventMs = readTimestamp(latestStream);
+  const previousLatestEventMs = previousState?.lastEventAtMs ?? storedLatestEventMs ?? null;
+  const latestEventAtMs = Math.max(
+    previousLatestEventMs ?? 0,
+    upstreamLatestEventMs ?? 0
+  ) || null;
+  const latestAdvanced =
+    upstreamLatestEventMs != null
+    && upstreamLatestEventMs > (previousLatestEventMs ?? 0) + 1500;
+  const importedTransition =
+    previousState?.hasImported === false
+    && profileState.hasImported === true;
+  const fullBackfill =
+    importedTransition
+    || (
+      previousState == null
+      && storedLatestEventMs == null
+      && profileState.hasImported === true
+    );
+
+  const basePendingMonth = fullBackfill
+    ? parseHistoryMonth(DEFAULT_HISTORY_START_MONTH)
+    : previousState?.pendingFromMs
+      ? historyMonthFromTimestamp(previousState.pendingFromMs)
+      : storedLatestEventMs != null || latestEventAtMs != null
+        ? historyMonthFromTimestamp(storedLatestEventMs ?? latestEventAtMs!)
+        : shiftHistoryMonth(currentMonth, -HISTORY_OVERLAP_MONTHS);
+  const pendingMonth = clampPendingMonth(basePendingMonth, currentMonth);
+  const months = listHistoryMonths(pendingMonth, currentMonth);
+  const existingByMonth = new Map(existingMonths.map((month) => [monthKey(month), month]));
+  const reconciledMonths: string[] = [];
+  const changedMonths: string[] = [];
+  const results: HistoryBackupResult[] = [];
+
+  for (const month of months) {
+    const key = monthKey(month);
+    const existing = existingByMonth.get(key);
+    const statsMonth = referenceMs < month.beforeMs
+      ? { ...month, beforeMs: referenceMs + 1 }
+      : month;
+    const statsResult = await fetchers.fetchStats(user.id, statsMonth);
+
+    if (!statsResult.ok) {
+      const expectedCount = existing?.expectedCount ?? 0;
+      const storedCount = await store.countEventsForMonth(user.key, month.afterMs, month.beforeMs);
+      const errors = [`stats status=${statsResult.status}`];
+      await store.upsertMonthStart({
+        userKey: user.key,
+        userId: user.id,
+        year: month.year,
+        month: month.month,
+        afterMs: month.afterMs,
+        beforeMs: month.beforeMs,
+        expectedCount,
+        error: errors[0],
+      });
+      await store.finishMonth({
+        userKey: user.key,
+        year: month.year,
+        month: month.month,
+        expectedCount,
+        storedCount,
+        status: "failed",
+        error: errors[0],
+      });
+      results.push({
+        ...month,
+        userKey: user.key,
+        userId: user.id,
+        expectedCount,
+        fetchedCount: 0,
+        storedCount,
+        skippedCount: 0,
+        status: "failed",
+        errors,
+      });
+      continue;
+    }
+
+    const expectedCount = getCount(statsResult.data);
+    const countChanged = existing != null && existing.expectedCount !== expectedCount;
+    if (countChanged) changedMonths.push(key);
+
+    const isCurrentMonth = month.afterMs === currentMonth.afterMs;
+    const isFalseCompleteEmptyMonth =
+      existing?.status === "complete"
+      && expectedCount === 0
+      && (
+        latestEventAtMs == null
+        || latestEventAtMs < month.beforeMs
+      );
+    const shouldReconcile =
+      isCurrentMonth
+      || fullBackfill
+      || latestAdvanced
+      || countChanged
+      || existing == null
+      || isFalseCompleteEmptyMonth
+      || ["open", "partial", "failed", "needs_review", "running", "pending"].includes(existing.status);
+
+    if (!shouldReconcile) continue;
+
+    const result = await backupHistoryMonth(user, month, {
+      ...options,
+      fetchers,
+      store,
+      referenceMs,
+      statsResult,
+      coveragePolicy: {
+        latestUpstreamEventMs: upstreamLatestEventMs ?? previousLatestEventMs,
+        hasImported: profileState.hasImported,
+      },
+    });
+    reconciledMonths.push(key);
+    results.push(result);
+  }
+
+  const reconciliationSucceeded = results.every((result) =>
+    !["partial", "failed", "needs_review"].includes(result.status)
+  );
+  const canAdvanceWindow =
+    reconciliationSucceeded
+    && latestEventAtMs != null
+    && (latestAdvanced || fullBackfill);
+  const nextPendingMonth = canAdvanceWindow
+    ? shiftHistoryMonth(historyMonthFromTimestamp(latestEventAtMs), -HISTORY_OVERLAP_MONTHS)
+    : pendingMonth;
+  const nextPendingFromMs = clampPendingMonth(nextPendingMonth, currentMonth).afterMs;
+  const previousCountChangedAt = previousState?.lastCountChangedAt ?? null;
+
+  await store.upsertUserState({
+    userKey: user.key,
+    userId: user.id,
+    pendingFromMs: nextPendingFromMs,
+    lastEventAtMs: latestEventAtMs,
+    lastCheckedAt: checkedAt,
+    lastCountChangedAt: changedMonths.length > 0 ? checkedAt : previousCountChangedAt,
+    hasImported: profileState.hasImported,
+    syncEnabled: profileState.syncEnabled,
+  });
+
+  return {
+    userKey: user.key,
+    userId: user.id,
+    pendingFromMs: pendingMonth.afterMs,
+    nextPendingFromMs,
+    latestEventAtMs,
+    latestAdvanced,
+    fullBackfill,
+    hasImported: profileState.hasImported,
+    syncEnabled: profileState.syncEnabled,
+    checkedMonths: months.length,
+    reconciledMonths,
+    changedMonths,
+    results,
+  };
 }

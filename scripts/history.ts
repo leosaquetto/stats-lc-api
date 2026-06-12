@@ -4,6 +4,7 @@ import {
   backupHistoryRange,
   estimateHistoryMonths,
   listHistoryMonths,
+  maintainWeeklyHistoryUser,
   parseHistoryMonth,
   previousClosedHistoryMonth,
   resolveHistoryUsers,
@@ -115,6 +116,44 @@ async function backupPreviousMonth(args: Args) {
   }
 }
 
+async function maintainWeekly(args: Args) {
+  const users = resolveHistoryUsers(readString(args, "user", "all"));
+  await historyStore.ensureReady();
+  const failures: Array<{ user: string; message: string }> = [];
+
+  for (const user of users) {
+    try {
+      const result = await maintainWeeklyHistoryUser(user);
+      printRows([{
+        user: result.userKey,
+        pendingFrom: new Date(result.pendingFromMs).toISOString(),
+        nextPendingFrom: new Date(result.nextPendingFromMs).toISOString(),
+        latestEventAt: result.latestEventAtMs == null
+          ? null
+          : new Date(result.latestEventAtMs).toISOString(),
+        latestAdvanced: result.latestAdvanced,
+        fullBackfill: result.fullBackfill,
+        hasImported: result.hasImported,
+        syncEnabled: result.syncEnabled,
+        checkedMonths: result.checkedMonths,
+        reconciledMonths: result.reconciledMonths,
+        changedMonths: result.changedMonths,
+        statuses: Object.fromEntries(
+          result.results.map((entry) => [monthLabel(entry), entry.status])
+        ),
+      }]);
+    } catch (error: any) {
+      const message = error?.message ?? String(error);
+      failures.push({ user: user.key, message });
+      console.error(JSON.stringify({ user: user.key, error: message }));
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Weekly history maintenance failed for ${failures.map((entry) => entry.user).join(", ")}`);
+  }
+}
+
 async function reconcile(args: Args) {
   const users = resolveHistoryUsers(readString(args, "user", "leo"));
   const monthArg = readString(args, "month");
@@ -160,6 +199,7 @@ const args = parseArgs(process.argv.slice(3));
 const commands: Record<string, (args: Args) => Promise<void>> = {
   estimate,
   backfill,
+  "maintain-weekly": maintainWeekly,
   "backup-previous-month": backupPreviousMonth,
   reconcile,
   status,
@@ -170,6 +210,7 @@ if (!commands[command]) {
   console.log("  tsx scripts/history.ts estimate --user=leo --from=2016-01 --to=2026-05");
   console.log("  tsx scripts/history.ts estimate --user=all --from=2026-05 --to=2026-05");
   console.log("  tsx scripts/history.ts backfill --user=leo,gab --from=2024-01 --to=2024-12");
+  console.log("  tsx scripts/history.ts maintain-weekly --user=all");
   console.log("  tsx scripts/history.ts backup-previous-month --user=all");
   console.log("  tsx scripts/history.ts reconcile --user=leo --month=2024-09");
   console.log("  tsx scripts/history.ts status --user=leo");

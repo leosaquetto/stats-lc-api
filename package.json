@@ -10,6 +10,7 @@
     "vercel-build": "npm run typecheck",
     "history:estimate": "tsx scripts/history.ts estimate",
     "history:backfill": "tsx scripts/history.ts backfill",
+    "history:maintain-weekly": "tsx scripts/history.ts maintain-weekly",
     "history:backup-previous-month": "tsx scripts/history.ts backup-previous-month",
     "history:reconcile": "tsx scripts/history.ts reconcile",
     "history:status": "tsx scripts/history.ts status"

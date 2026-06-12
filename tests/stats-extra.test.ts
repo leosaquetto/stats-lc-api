@@ -556,7 +556,7 @@ test("group-activity hydrates track-only stream rows and keeps empty users parti
   assert.equal(emptyMember.activity, null);
   assert.deepEqual(emptyMember.warnings, ["no_streams"]);
   assert.equal(streamRequestsByUser.size, configuredUserCount);
-  assert.match(captured.headers["cache-control"], /s-maxage=180/);
+  assert.match(captured.headers["cache-control"], /s-maxage=60/);
 
   const second = createResponseCapture();
   await groupActivityHandler({ query: {} } as any, second.res);

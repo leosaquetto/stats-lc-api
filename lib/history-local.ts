@@ -36,7 +36,11 @@ function monthFromTimestamp(timestamp: number) {
   return parseHistoryMonth(MONTH_FORMATTER.format(new Date(timestamp)));
 }
 
-export function resolveClosedMonthRange(afterMs: number, beforeMs: number): LocalHistoryRange | null {
+export function resolveClosedMonthRange(
+  afterMs: number,
+  beforeMs: number,
+  referenceMs = Date.now()
+): LocalHistoryRange | null {
   if (!Number.isFinite(afterMs) || !Number.isFinite(beforeMs) || beforeMs <= afterMs) return null;
   const from = monthFromTimestamp(afterMs);
   const beforePreviousMs = beforeMs - 1;
@@ -48,6 +52,8 @@ export function resolveClosedMonthRange(afterMs: number, beforeMs: number): Loca
   const first = months[0];
   const last = months[months.length - 1];
   if (afterMs !== first.afterMs || beforeMs !== last.beforeMs) return null;
+  const currentMonth = monthFromTimestamp(referenceMs);
+  if (last.beforeMs > currentMonth.afterMs) return null;
   return { afterMs, beforeMs, months };
 }
 

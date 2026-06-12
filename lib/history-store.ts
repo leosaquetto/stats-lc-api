@@ -1,6 +1,14 @@
 import { neon } from "@neondatabase/serverless";
 
-export type HistoryMonthStatus = "pending" | "running" | "complete" | "partial" | "failed" | "needs_review";
+export type HistoryMonthStatus =
+  | "pending"
+  | "running"
+  | "open"
+  | "awaiting_sync"
+  | "complete"
+  | "partial"
+  | "failed"
+  | "needs_review";
 
 export type StreamHistoryEvent = {
   sourceHash: string;
@@ -36,6 +44,19 @@ export type HistoryStoredStream = StreamHistoryEvent & {
   updatedAt?: string | null;
 };
 
+export type HistoryUserState = {
+  userKey: string;
+  userId: string;
+  pendingFromMs: number;
+  lastEventAtMs: number | null;
+  lastCheckedAt: string | null;
+  lastCountChangedAt: string | null;
+  hasImported: boolean | null;
+  syncEnabled: boolean | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
 const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
 const sql = databaseUrl ? neon(databaseUrl) : null;
 let schemaReady: Promise<void> | null = null;
@@ -68,6 +89,19 @@ const rowToStreamEvent = (row: any): HistoryStoredStream => ({
   playedMs: Number(row.played_ms || 0),
   raw: row.raw,
   ingestedAt: row.ingested_at || null,
+  updatedAt: row.updated_at || null,
+});
+
+const rowToUserState = (row: any): HistoryUserState => ({
+  userKey: row.user_key,
+  userId: row.user_id,
+  pendingFromMs: Number(row.pending_from_ms),
+  lastEventAtMs: row.last_event_at_ms == null ? null : Number(row.last_event_at_ms),
+  lastCheckedAt: row.last_checked_at || null,
+  lastCountChangedAt: row.last_count_changed_at || null,
+  hasImported: row.has_imported == null ? null : Boolean(row.has_imported),
+  syncEnabled: row.sync_enabled == null ? null : Boolean(row.sync_enabled),
+  createdAt: row.created_at || null,
   updatedAt: row.updated_at || null,
 });
 
@@ -109,10 +143,25 @@ const ensureSchema = async () => {
         primary key (user_key, year, month)
       )
     `;
+    await sql`
+      create table if not exists stream_history_user_states (
+        user_key text primary key,
+        user_id text not null,
+        pending_from_ms bigint not null,
+        last_event_at_ms bigint,
+        last_checked_at timestamptz,
+        last_count_changed_at timestamptz,
+        has_imported boolean,
+        sync_enabled boolean,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      )
+    `;
     await sql`create index if not exists stream_events_user_time_idx on stream_events (user_key, played_at desc)`;
     await sql`create index if not exists stream_events_track_idx on stream_events (track_id)`;
     await sql`create index if not exists stream_events_album_idx on stream_events (album_id)`;
     await sql`create index if not exists stream_month_backups_status_idx on stream_month_backups (status, year, month)`;
+    await sql`create index if not exists stream_history_user_states_pending_idx on stream_history_user_states (pending_from_ms)`;
   })();
   await schemaReady;
 };
@@ -227,7 +276,7 @@ export const historyStore = {
         stored_count = ${input.storedCount},
         status = ${input.status},
         error = ${input.error || null},
-        completed_at = case when ${input.status} in ('complete', 'partial', 'failed', 'needs_review') then now() else completed_at end,
+        completed_at = case when ${input.status} in ('complete', 'partial', 'failed', 'needs_review') then now() else null end,
         updated_at = now()
       where user_key = ${input.userKey}
         and year = ${input.year}
@@ -244,6 +293,54 @@ export const historyStore = {
       ? await db`select * from stream_month_backups where user_key = ${userKey} order by year, month`
       : await db`select * from stream_month_backups order by user_key, year, month`;
     return rows.map(rowToMonthBackup);
+  },
+
+  async getLatestEventMs(userKey: string) {
+    const db = requireSql();
+    await ensureSchema();
+    const rows = await db`
+      select max(played_at_ms)::bigint as latest_ms
+      from stream_events
+      where user_key = ${userKey}
+    `;
+    return rows[0]?.latest_ms == null ? null : Number(rows[0].latest_ms);
+  },
+
+  async getUserState(userKey: string) {
+    const db = requireSql();
+    await ensureSchema();
+    const rows = await db`
+      select *
+      from stream_history_user_states
+      where user_key = ${userKey}
+      limit 1
+    `;
+    return rows[0] ? rowToUserState(rows[0]) : null;
+  },
+
+  async upsertUserState(input: Omit<HistoryUserState, "createdAt" | "updatedAt">) {
+    const db = requireSql();
+    await ensureSchema();
+    const rows = await db`
+      insert into stream_history_user_states (
+        user_key, user_id, pending_from_ms, last_event_at_ms,
+        last_checked_at, last_count_changed_at, has_imported, sync_enabled
+      ) values (
+        ${input.userKey}, ${input.userId}, ${input.pendingFromMs}, ${input.lastEventAtMs},
+        ${input.lastCheckedAt}, ${input.lastCountChangedAt}, ${input.hasImported}, ${input.syncEnabled}
+      )
+      on conflict (user_key) do update set
+        user_id = excluded.user_id,
+        pending_from_ms = excluded.pending_from_ms,
+        last_event_at_ms = excluded.last_event_at_ms,
+        last_checked_at = excluded.last_checked_at,
+        last_count_changed_at = excluded.last_count_changed_at,
+        has_imported = excluded.has_imported,
+        sync_enabled = excluded.sync_enabled,
+        updated_at = now()
+      returning *
+    `;
+    return rowToUserState(rows[0]);
   },
 
   async listCompleteMonths(userKey: string, afterMs: number, beforeMs: number) {

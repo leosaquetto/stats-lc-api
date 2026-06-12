@@ -227,7 +227,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
     };
   });
 
-  setCacheHeaders(res, 180, false, 900);
+  setCacheHeaders(res, 60, false, 300);
 
   return res.status(200).json({
     ok: true,

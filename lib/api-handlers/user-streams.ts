@@ -5,6 +5,8 @@ import {
   sendJsonError,
   setCacheHeaders,
 } from "../api-helpers.js";
+import { fetchLocalHistoryStreams } from "../history-local.js";
+import { resolveHistoryUser } from "../history-backup.js";
 import { fetchUserStreams, normalizeStreamItems } from "../user-streams-service.js";
 import { fetchUserTop } from "../user-tops-service.js";
 import { resolveUserId } from "../users.js";
@@ -30,6 +32,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const upstreamForce = force && limit <= 50;
 
   try {
+    let localHistory: Awaited<ReturnType<typeof fetchLocalHistoryStreams>> = null;
+    if (!force && params.after && params.before) {
+      const afterMs = Number(params.after);
+      const beforeMs = Number(params.before);
+      try {
+        const historyUser = resolveHistoryUser(user);
+        localHistory = await fetchLocalHistoryStreams({
+          userKey: historyUser.key,
+          afterMs,
+          beforeMs,
+          limit: params.limit ? Number(params.limit) : undefined,
+          offset: params.offset ? Number(params.offset) : undefined,
+          order: "desc",
+        });
+      } catch {
+        localHistory = null;
+      }
+    }
+
+    const albumItems = resolveAlbums
+      ? await fetchUserTop(userId, "albums", params.after ? Number(params.after) : Date.now() - 30 * 24 * 60 * 60 * 1000, 50, { force: upstreamForce })
+          .then(r => r.ok ? (r.data as any)?.items || [] : [])
+      : [];
+
+    if (localHistory?.ok) {
+      setCacheHeaders(res, resolveAlbums ? 600 : 300, false, resolveAlbums ? 3600 : 1800);
+      return res.status(200).json({
+        ok: true,
+        user,
+        userId,
+        endpoint: "history_store",
+        source: localHistory.source,
+        coverage: {
+          complete: true,
+          missingMonths: [],
+        },
+        total: localHistory.total,
+        items: await normalizeStreamItems({ items: localHistory.items }, {
+          force: false,
+          userId,
+          useTrackStreamEvidence: resolveAlbums,
+          trackStreamEvidenceStrategy: "latest",
+          albumItems,
+        }),
+      });
+    }
+
     const result = await fetchUserStreams(userId, params, { force: upstreamForce });
 
     if (!result.ok) {
@@ -39,12 +88,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Fetch recent top albums to provide album context for track enrichment
-    const albumItems = resolveAlbums
-      ? await fetchUserTop(userId, "albums", params.after ? Number(params.after) : Date.now() - 30 * 24 * 60 * 60 * 1000, 50, { force: upstreamForce })
-          .then(r => r.ok ? (r.data as any)?.items || [] : [])
-      : [];
-
     setCacheHeaders(res, resolveAlbums ? 600 : 300, upstreamForce, resolveAlbums ? 3600 : 1800);
 
     return res.status(200).json({
@@ -52,6 +95,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       user,
       userId,
       endpoint: result.endpoint,
+      source: "stats.fm-api",
+      ...(localHistory
+        ? {
+            coverage: {
+              complete: false,
+              missingMonths: localHistory.missingMonths,
+            },
+          }
+        : {}),
       items: await normalizeStreamItems(result.data, {
         force: upstreamForce,
         userId,

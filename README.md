@@ -24,8 +24,8 @@ avulso como substituto do comando suportado pelo repo.
 - `lib/user-stats-service.ts`: stats e intervalos temporais.
 - `lib/user-streams-service.ts`: recentes e historicos.
 - `lib/history-backup.ts`, `lib/history-store.ts` e `lib/history-local.ts`:
-  backup de meses fechados do historico em Postgres/Neon e leitura local
-  interna para ranges totalmente cobertos.
+  manutencao semanal adaptativa do historico em Postgres/Neon, inclusive mes
+  atual aberto e ausencias longas, com leitura local para ranges completos.
 - `lib/user-tops-service.ts`: tops normalizados.
 - `lib/track-album-enrichment.ts`: resolucao de album por evidencia do
   historico do usuario.
@@ -38,7 +38,8 @@ avulso como substituto do comando suportado pelo repo.
 - `/api/live-probe?user=<usuario>` e a superficie `pulse` minima para detectar
   uma nova faixa do usuario destacado sem consultar o grupo inteiro.
 - `/api/group-activity` preenche a Atividade do Circulo com a ultima linha do
-  historico completo de cada membro, sem competir com o polling live.
+  historico completo de cada membro, com cache curto e sem competir com o
+  polling live.
 - `/api/group-live?statsUser=<usuario>` pode acrescentar `featuredStats` sem
   alterar chamadas antigas.
 - `/api/latest-discovery?user=<usuario>` so devolve uma descoberta quando a
@@ -83,7 +84,7 @@ regressao, mas nao sao SLOs.
 
 - [`docs/api-contract.md`](./docs/api-contract.md): contrato publico,
   resiliencia, cache, endpoints e checkpoint de performance.
-- [`docs/history-backup.md`](./docs/history-backup.md): backup mensal de
-  historico fechado, comandos e workflow.
+- [`docs/history-backup.md`](./docs/history-backup.md): manutencao semanal
+  adaptativa, estados de cobertura, comandos e workflow.
 - [`docs/track-album-resolution.md`](./docs/track-album-resolution.md): regra
   obrigatoria para album real em payloads de faixa.

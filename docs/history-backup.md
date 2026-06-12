@@ -1,13 +1,60 @@
 # History Backup
 
-This document describes the closed-month stream history backup.
+This document describes the adaptive weekly backup of full stats.fm stream
+history.
 
 ## Policy
 
-- The current month stays on the existing stats.fm + cache path.
-- Closed months are archived into Postgres/Neon.
-- The scheduled workflow backs up only the previous closed month for every configured user.
-- Older months are reconciled only by manual command.
+- The backup reads only `/users/:id/streams` and `/streams/stats`.
+- `/streams/recent` is never stored, polled, or used to prove backup coverage.
+- GitHub Actions runs every Sunday at `05:17 UTC`.
+- Users are processed sequentially to keep upstream load predictable.
+- The current month is upserted every week with status `open`.
+- Closed months are only served locally after they reach `complete`.
+- A dormant user's pending reconciliation window remains open and grows until
+  their full history advances.
+
+## Adaptive Window
+
+Each user has persistent maintenance state:
+
+- latest event observed in full `/streams` history;
+- pending reconciliation start;
+- last check;
+- last monthly count change;
+- observed import and sync flags.
+
+The first weekly run reconstructs this state from stored events. The pending
+window starts in the month of the latest known historical activity.
+
+Every Sunday the maintenance checks monthly counts from the pending month
+through the current month:
+
+1. A new month, changed count, incomplete status, or current month is
+   reconciled from full `/streams`.
+2. When the latest full-history event advances, every month in the absence
+   window is downloaded again.
+3. After successful reconciliation, the window advances to the month of the
+   latest event while preserving two earlier months.
+4. A `hasImported=false` to `hasImported=true` transition starts a complete
+   backfill from `2016-01`.
+
+The window can grow indefinitely while a user does not synchronize. Opening a
+public profile is not treated as synchronization.
+
+## Monthly Statuses
+
+- `open`: current month; rows are upserted weekly but coverage is incomplete.
+- `awaiting_sync`: closed month not yet proven by a later full-history event.
+- `complete`: closed month, all pages fetched, and stored count equals expected
+  count after synchronization advanced beyond the month.
+- `partial`: expected rows or pages are missing.
+- `needs_review`: stored count exceeds the current upstream monthly count.
+- `pending`, `running`, `failed`: operational states for active or failed work.
+
+An empty month after the latest known event remains `awaiting_sync`. If history
+later advances beyond it, the month is fetched again and can become `complete`
+only after remaining empty or after delayed streams are stored.
 
 ## Required Secret
 
@@ -20,34 +67,22 @@ They should point to the same Neon/Postgres project used by the API.
 
 ## Commands
 
+Run the same maintenance used by the Sunday workflow:
+
+```bash
+npm run history:maintain-weekly -- --user=all
+```
+
 Estimate monthly volume without saving streams:
 
 ```bash
 npm run history:estimate -- --user=leo --from=2016-01 --to=2026-05
 ```
 
-Use `all` or a comma-separated list to run the same command for multiple users:
-
-```bash
-npm run history:estimate -- --user=all --from=2026-05 --to=2026-05
-npm run history:estimate -- --user=gab,savio --from=2026-05 --to=2026-05
-```
-
-Backfill a range of closed months:
+Backfill or reconcile manually:
 
 ```bash
 npm run history:backfill -- --user=leo --from=2024-01 --to=2024-12
-```
-
-Back up the previous closed month:
-
-```bash
-npm run history:backup-previous-month -- --user=all
-```
-
-Reconcile one old month manually:
-
-```bash
 npm run history:reconcile -- --user=leo --month=2024-09
 ```
 
@@ -57,27 +92,26 @@ Inspect stored coverage:
 npm run history:status -- --user=leo
 ```
 
-## Rollout
-
-1. Run `history:estimate` for `leo`.
-2. Backfill one small closed month and confirm `expectedCount === storedCount`.
-3. Backfill all closed months for `leo`.
-4. Run `history:estimate -- --user=all` for one closed month to check every account.
-5. Backfill each remaining user in controlled ranges, preferably one user at a time.
-6. Let the monthly workflow maintain only the previous closed month for all configured users.
+`history:backup-previous-month` remains available as a manual compatibility
+command, but it is no longer the scheduled maintenance policy.
 
 ## Local API Path
 
-The first local read surface is internal:
+`/api/user-streams` may read Postgres only when:
 
-- `historyStore.listCompleteMonths(userKey, afterMs, beforeMs)` checks coverage.
-- `historyStore.listEvents(...)` reads paginated local stream rows.
-- `fetchLocalHistoryStreams(...)` only returns data when the requested range exactly matches complete closed months.
+- `after` and `before` exactly cover one or more closed calendar months;
+- every requested month is marked `complete`;
+- the request is not forced.
 
-Public API endpoints should keep using stats.fm for the current month and any partial range. When a closed-month range is fully covered locally, they can swap to `fetchLocalHistoryStreams` without changing response contracts.
+`open`, `awaiting_sync`, `partial`, `needs_review`, missing coverage, current
+month, and arbitrary date ranges continue to use stats.fm. The response exposes
+`source` and optional `coverage` metadata without changing normalized `items`.
 
 ## Notes
 
-- Rows are deduped by a stable source hash derived from user, timestamp, track, album, and duration.
-- `stream_month_backups` records monthly status and makes retries safe.
-- A partial month keeps saved rows and can be retried with `history:reconcile`.
+- Rows are deduped by a stable source hash derived from user, timestamp, track,
+  album, and duration.
+- Upserts make weekly reruns idempotent.
+- Existing events and month records are preserved during state migration.
+- The first weekly execution re-evaluates empty months that were previously
+  marked complete without synchronization proof.

@@ -75,7 +75,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 | Endpoint | Query | Purpose | Response highlights |
 | --- | --- | --- | --- |
 | `/api/group` | optional `force=1`, `debug=1` | Full group dashboard payload. | `members`, `rankings.today|week|month`, each member's `profile`, `platform`, `catalogSummary`, `nowPlaying`, `recent`, `stats`, `tops`, and per-section `errors`. Debug includes Sao Paulo range anchors and sanitized upstream/cache details. |
-| `/api/group-activity` | none | Cached background fallback for the Circle Activity reel. | Fetches one row from each member's full `/streams` history with concurrency 3, hydrates track-only rows, and returns `members[].{key,userId,activity,generatedAt,warnings?}`. Responses may be partial under the endpoint deadline; `activity.isNow` is always `false`. |
+| `/api/group-activity` | none | Cached background fallback for the Circle Activity reel. | Fetches one row from each member's full `/streams` history with concurrency 3, hydrates track-only rows, and returns `members[].{key,userId,activity,generatedAt,warnings?}`. Responses may be partial under the endpoint deadline; `activity.isNow` is always `false`. CDN freshness is 60 seconds with 5 minutes of stale fallback. |
 | `/api/group-live` | optional `force=1`, `debug=1`, `statsUser=<user>` | Lightweight Home/now-playing polling surface. | `ok`, `source`, `generatedAt`, and `members`. A valid `statsUser` adds optional `featuredStats`; calls without it remain backward compatible. |
 | `/api/live-probe` | `user=<user>` | Minimal highlighted-user playback pulse. Fetches only `/streams/recent?limit=1`, never uses `force=1`, profile, tops, colors, or enrichment. | `ok`, resolved `user`, `userId`, `generatedAt`, `signature`, and one normalized `item`. The signature combines playback timestamp, track ID, and album ID. Uses the dedicated 5-second `pulse` cache with stale fallback only on failure. |
 | `/api/user` | `user=<user>`, optional `force=1`, `debug=1` | One user profile summary. | `profile`, resolved `platform`, `legacy` upstream result, and sanitized `raw` only when `debug=1`. |
@@ -95,7 +95,7 @@ All endpoints are `GET` handlers. `user` accepts configured aliases from `lib/us
 
 Track and album-bearing responses include `dominantColor` when artwork sampling succeeds. This is calculated server-side from the artwork URL and cached in-process by URL so the app can render the LeoHeader/vinyl/progress accent without doing canvas work on the client. Clients should keep their local color extraction only as a fallback for old payloads or temporary sampling failures.
 | `/api/lyrics` | `title=<track title>`, optional `artist=<artist name>`, `includeLyrics=1`, `includeWriters=1` | Genius lyrics availability match. | Uses the server-side `GENIUS_ACCESS_TOKEN` to search Genius and returns `hasLyrics` plus `match.{title,artist,url,confidence}`. With `includeLyrics=1`, it also attempts best-effort page extraction from Genius' modern `data-lyrics-container` blocks and returns `lyrics` when available. With `includeWriters=1`, it fetches Genius song metadata and returns `writers` as an array of writer names. It never exposes the Genius token. |
-| `/api/user-streams` | `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | Stream history page data. | Normalized stream `items` for `/users/:id/streams`. |
+| `/api/user-streams` | `user=<user>`, optional `limit`, `offset`, `after`, `before`, `force=1` | Stream history page data. | Normalized stream `items`. Exact closed-month ranges use Postgres only when every month is `complete`; all other ranges fall back to `/users/:id/streams`. Responses expose `source` and optional `coverage.{complete,missingMonths}`. |
 | `/api/user-friends` | `user=<user>`, optional `force=1` | Friends page data. | Normalized friend `items` plus best-effort `count`; count lookup failure is isolated under `errors.count`. |
 
 `/api/lyrics` returns `hasLyrics: false` with `reason: "not_configured"` when `GENIUS_ACCESS_TOKEN` is missing, so clients can hide lyrics UI without treating that as a hard API failure. Full lyrics extraction depends on Genius page HTML and can return `lyrics: null` with reasons such as `lyrics_upstream_403` if the page blocks server-side access.
@@ -156,18 +156,24 @@ to `/#/circle?tab=orbits` and do not include music metadata.
 - Normal endpoint payloads should not expose `statsfmFetch` cache/cooldown/stale metadata. Use `/api/health` or explicit debug surfaces.
 - `debug=1` is intentionally limited to selected endpoints and sanitizes sensitive keys matching token, authorization, cookie, secret, or session.
 
-### Closed-month history backup
+### Adaptive weekly history backup
 
-The repo includes an operational backup workflow for closed-month stream history.
-It stores normalized stream events in Postgres/Neon through local scripts and
-GitHub Actions; it does not change public API payloads in V1. See
+The repo includes an operational weekly workflow for full stream history. It
+stores normalized `/streams` events in Postgres/Neon through local scripts and
+GitHub Actions and never stores `/streams/recent`. See
 [`docs/history-backup.md`](./history-backup.md).
 
-The monthly workflow can now run for `all` configured users, and the internal
-`lib/history-local.ts` surface can serve exact closed-month ranges from
-Postgres when every requested month is marked `complete`. Public endpoints
-should continue falling back to stats.fm for the current month, partial ranges,
-or missing coverage.
+The Sunday `05:17 UTC` workflow processes configured users sequentially. It
+keeps the current month `open`, marks unproven empty months `awaiting_sync`, and
+grows a per-user reconciliation window while full history is dormant. When the
+latest `/streams` event advances, the entire absence window is reconciled and
+two earlier months remain as overlap. A `hasImported=false` to `true`
+transition starts a full backfill.
+
+`lib/history-local.ts` and `/api/user-streams` can serve exact closed-month
+ranges from Postgres only when every requested month is `complete`. `open`,
+`awaiting_sync`, `partial`, `needs_review`, current-month, arbitrary, and
+missing ranges continue falling back to stats.fm.
 
 ## Reference App Route Matrix
 

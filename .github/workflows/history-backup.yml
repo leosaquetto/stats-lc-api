@@ -2,17 +2,18 @@ name: History Backup
 
 on:
   schedule:
-    - cron: "17 5 2 * *"
+    - cron: "17 5 * * 0"
   workflow_dispatch:
     inputs:
       command:
         description: "History command to run"
         type: choice
         required: true
-        default: "backup-previous-month"
+        default: "maintain-weekly"
         options:
           - estimate
           - backfill
+          - maintain-weekly
           - backup-previous-month
           - reconcile
           - status
@@ -47,9 +48,9 @@ jobs:
 
       - run: npm ci
 
-      - name: Run monthly scheduled backup
+      - name: Run weekly scheduled maintenance
         if: github.event_name == 'schedule'
-        run: npm run history:backup-previous-month -- --user=all
+        run: npm run history:maintain-weekly -- --user=all
 
       - name: Run manual estimate
         if: github.event_name == 'workflow_dispatch' && inputs.command == 'estimate'
@@ -66,6 +67,10 @@ jobs:
           if [ -n "${{ inputs.from }}" ]; then ARGS="$ARGS --from=${{ inputs.from }}"; fi
           if [ -n "${{ inputs.to }}" ]; then ARGS="$ARGS --to=${{ inputs.to }}"; fi
           npm run history:backfill -- $ARGS
+
+      - name: Run manual weekly maintenance
+        if: github.event_name == 'workflow_dispatch' && inputs.command == 'maintain-weekly'
+        run: npm run history:maintain-weekly -- --user=${{ inputs.user }}
 
       - name: Run manual previous month backup
         if: github.event_name == 'workflow_dispatch' && inputs.command == 'backup-previous-month'
