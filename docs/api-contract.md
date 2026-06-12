@@ -148,6 +148,12 @@ It stores normalized stream events in Postgres/Neon through local scripts and
 GitHub Actions; it does not change public API payloads in V1. See
 [`docs/history-backup.md`](./history-backup.md).
 
+The monthly workflow can now run for `all` configured users, and the internal
+`lib/history-local.ts` surface can serve exact closed-month ranges from
+Postgres when every requested month is marked `complete`. Public endpoints
+should continue falling back to stats.fm for the current month, partial ranges,
+or missing coverage.
+
 ## Reference App Route Matrix
 
 - `/:id` and `/user/:id/[[...deeplink]]` -> existing `/api/user`, `/api/group`, `/api/group-live`, `/api/top`, `/api/stats`, and the new detail/list endpoints as needed.

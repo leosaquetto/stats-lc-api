@@ -6,7 +6,7 @@ This document describes the closed-month stream history backup.
 
 - The current month stays on the existing stats.fm + cache path.
 - Closed months are archived into Postgres/Neon.
-- The scheduled workflow backs up only the previous month for `leo`.
+- The scheduled workflow backs up only the previous closed month for every configured user.
 - Older months are reconciled only by manual command.
 
 ## Required Secret
@@ -26,6 +26,13 @@ Estimate monthly volume without saving streams:
 npm run history:estimate -- --user=leo --from=2016-01 --to=2026-05
 ```
 
+Use `all` or a comma-separated list to run the same command for multiple users:
+
+```bash
+npm run history:estimate -- --user=all --from=2026-05 --to=2026-05
+npm run history:estimate -- --user=gab,savio --from=2026-05 --to=2026-05
+```
+
 Backfill a range of closed months:
 
 ```bash
@@ -35,7 +42,7 @@ npm run history:backfill -- --user=leo --from=2024-01 --to=2024-12
 Back up the previous closed month:
 
 ```bash
-npm run history:backup-previous-month -- --user=leo
+npm run history:backup-previous-month -- --user=all
 ```
 
 Reconcile one old month manually:
@@ -55,8 +62,19 @@ npm run history:status -- --user=leo
 1. Run `history:estimate` for `leo`.
 2. Backfill one small closed month and confirm `expectedCount === storedCount`.
 3. Backfill all closed months for `leo`.
-4. Let the monthly workflow maintain only the previous closed month.
-5. Repeat manually for other configured users after `leo` is validated.
+4. Run `history:estimate -- --user=all` for one closed month to check every account.
+5. Backfill each remaining user in controlled ranges, preferably one user at a time.
+6. Let the monthly workflow maintain only the previous closed month for all configured users.
+
+## Local API Path
+
+The first local read surface is internal:
+
+- `historyStore.listCompleteMonths(userKey, afterMs, beforeMs)` checks coverage.
+- `historyStore.listEvents(...)` reads paginated local stream rows.
+- `fetchLocalHistoryStreams(...)` only returns data when the requested range exactly matches complete closed months.
+
+Public API endpoints should keep using stats.fm for the current month and any partial range. When a closed-month range is fully covered locally, they can swap to `fetchLocalHistoryStreams` without changing response contracts.
 
 ## Notes
 

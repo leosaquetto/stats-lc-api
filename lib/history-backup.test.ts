@@ -7,7 +7,9 @@ import {
   listHistoryMonths,
   normalizeHistoryEvent,
   parseHistoryMonth,
+  resolveHistoryUsers,
 } from "./history-backup.ts";
+import { historyEventToStream, resolveClosedMonthRange } from "./history-local.ts";
 import type { StreamHistoryEvent } from "./history-store.ts";
 import type { StatsfmResult } from "./statsfm.ts";
 
@@ -102,6 +104,15 @@ test("estimateHistoryMonths reads monthly counts without fetching streams", asyn
   assert.equal(rows[1].expectedCount, 0);
 });
 
+test("resolveHistoryUsers accepts all and comma-separated user keys", () => {
+  const all = resolveHistoryUsers("all");
+  assert.ok(all.length >= 7);
+  assert.equal(all[0].key, "leo");
+
+  const selected = resolveHistoryUsers("leo,gab");
+  assert.deepEqual(selected.map((entry) => entry.key), ["leo", "gab"]);
+});
+
 test("backupHistoryMonth stores a complete closed month", async () => {
   const month = createHistoryMonth(2026, 1);
   const memory = createMemoryStore();
@@ -190,4 +201,29 @@ test("normalizeHistoryEvent extracts stable searchable fields", () => {
   assert.equal(event.artistId, "artist-one");
   assert.equal(event.playedMs, 180000);
   assert.equal(typeof event.sourceHash, "string");
+});
+
+test("resolveClosedMonthRange only accepts exact closed month ranges", () => {
+  const january = createHistoryMonth(2026, 1);
+  const february = createHistoryMonth(2026, 2);
+  const exact = resolveClosedMonthRange(january.afterMs, february.beforeMs);
+  assert.deepEqual(exact?.months.map((month) => `${month.year}-${month.month}`), ["2026-1", "2026-2"]);
+
+  assert.equal(resolveClosedMonthRange(january.afterMs + 1, january.beforeMs), null);
+  assert.equal(resolveClosedMonthRange(january.afterMs, january.beforeMs - 1), null);
+});
+
+test("historyEventToStream keeps raw stream fields and durable album evidence", () => {
+  const event = normalizeHistoryEvent(stream("one", "2026-01-02T10:00:00.000Z", {
+    albumId: null,
+    track: { id: "one", name: "Track one" },
+  }), user);
+  assert.ok(event);
+  event.albumId = "album-from-history";
+
+  const item = historyEventToStream(event);
+  assert.equal(item.trackId, "one");
+  assert.equal(item.albumId, "album-from-history");
+  assert.equal(item.track.id, "one");
+  assert.equal(item.playedAtMs, event.playedAtMs);
 });

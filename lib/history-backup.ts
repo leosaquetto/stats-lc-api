@@ -160,6 +160,12 @@ export function resolveHistoryUser(userKey: string): HistoryUser {
   return user;
 }
 
+export function resolveHistoryUsers(input: string): HistoryUser[] {
+  const value = input.trim();
+  if (!value || value === "all") return getUsersList();
+  return value.split(",").map((entry) => resolveHistoryUser(entry.trim())).filter(Boolean);
+}
+
 function defaultFetchers(): HistoryFetchers {
   return {
     fetchStats(userId, month) {

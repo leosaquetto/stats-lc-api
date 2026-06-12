@@ -31,6 +31,11 @@ export type StreamMonthBackup = {
   completedAt?: string | null;
 };
 
+export type HistoryStoredStream = StreamHistoryEvent & {
+  ingestedAt?: string | null;
+  updatedAt?: string | null;
+};
+
 const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
 const sql = databaseUrl ? neon(databaseUrl) : null;
 let schemaReady: Promise<void> | null = null;
@@ -48,6 +53,22 @@ const rowToMonthBackup = (row: any): StreamMonthBackup => ({
   error: row.error || null,
   startedAt: row.started_at || null,
   completedAt: row.completed_at || null,
+});
+
+const rowToStreamEvent = (row: any): HistoryStoredStream => ({
+  sourceHash: row.source_hash,
+  userKey: row.user_key,
+  userId: row.user_id,
+  platform: row.platform || null,
+  playedAt: row.played_at instanceof Date ? row.played_at.toISOString() : row.played_at,
+  playedAtMs: Number(row.played_at_ms),
+  trackId: row.track_id || null,
+  albumId: row.album_id || null,
+  artistId: row.artist_id || null,
+  playedMs: Number(row.played_ms || 0),
+  raw: row.raw,
+  ingestedAt: row.ingested_at || null,
+  updatedAt: row.updated_at || null,
 });
 
 const ensureSchema = async () => {
@@ -223,5 +244,56 @@ export const historyStore = {
       ? await db`select * from stream_month_backups where user_key = ${userKey} order by year, month`
       : await db`select * from stream_month_backups order by user_key, year, month`;
     return rows.map(rowToMonthBackup);
+  },
+
+  async listCompleteMonths(userKey: string, afterMs: number, beforeMs: number) {
+    const db = requireSql();
+    await ensureSchema();
+    const rows = await db`
+      select *
+      from stream_month_backups
+      where user_key = ${userKey}
+        and status = 'complete'
+        and after_ms >= ${afterMs}
+        and before_ms <= ${beforeMs}
+      order by year, month
+    `;
+    return rows.map(rowToMonthBackup);
+  },
+
+  async listEvents(input: {
+    userKey: string;
+    afterMs: number;
+    beforeMs: number;
+    limit?: number;
+    offset?: number;
+    order?: "asc" | "desc";
+  }) {
+    const db = requireSql();
+    await ensureSchema();
+    const limit = Math.max(1, Math.min(10000, Number(input.limit || 100)));
+    const offset = Math.max(0, Number(input.offset || 0));
+    const rows = input.order === "asc"
+      ? await db`
+          select *
+          from stream_events
+          where user_key = ${input.userKey}
+            and played_at_ms >= ${input.afterMs}
+            and played_at_ms < ${input.beforeMs}
+          order by played_at asc, source_hash asc
+          limit ${limit}
+          offset ${offset}
+        `
+      : await db`
+          select *
+          from stream_events
+          where user_key = ${input.userKey}
+            and played_at_ms >= ${input.afterMs}
+            and played_at_ms < ${input.beforeMs}
+          order by played_at desc, source_hash desc
+          limit ${limit}
+          offset ${offset}
+        `;
+    return rows.map(rowToStreamEvent);
   },
 };

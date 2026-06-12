@@ -17,9 +17,9 @@ on:
           - reconcile
           - status
       user:
-        description: "Configured user key"
+        description: "Configured user key, comma-separated keys, or all"
         required: true
-        default: "leo"
+        default: "all"
       from:
         description: "Start month for estimate/backfill (YYYY-MM)"
         required: false
@@ -49,7 +49,7 @@ jobs:
 
       - name: Run monthly scheduled backup
         if: github.event_name == 'schedule'
-        run: npm run history:backup-previous-month -- --user=leo
+        run: npm run history:backup-previous-month -- --user=all
 
       - name: Run manual estimate
         if: github.event_name == 'workflow_dispatch' && inputs.command == 'estimate'

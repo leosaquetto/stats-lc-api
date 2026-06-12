@@ -6,7 +6,7 @@ import {
   listHistoryMonths,
   parseHistoryMonth,
   previousClosedHistoryMonth,
-  resolveHistoryUser,
+  resolveHistoryUsers,
   type HistoryMonth,
 } from "../lib/history-backup.ts";
 import { historyStore } from "../lib/history-store.ts";
@@ -50,87 +50,100 @@ function printRows(rows: Array<Record<string, unknown>>) {
 }
 
 async function estimate(args: Args) {
-  const user = resolveHistoryUser(readString(args, "user", "leo"));
+  const users = resolveHistoryUsers(readString(args, "user", "leo"));
   const range = resolveRange(args);
-  const rows = await estimateHistoryMonths(user, listHistoryMonths(range.from, range.to));
-  const total = rows.reduce((sum, row) => sum + row.expectedCount, 0);
-  const pages = rows.reduce((sum, row) => sum + row.pages, 0);
-  printRows(rows.map((row) => ({
-    user: row.userKey,
-    month: monthLabel(row),
-    expectedCount: row.expectedCount,
-    pages: row.pages,
-    ok: row.ok,
-    status: row.status,
-  })));
-  console.log(JSON.stringify({
-    summary: {
+  const summaries = [];
+  for (const user of users) {
+    const rows = await estimateHistoryMonths(user, listHistoryMonths(range.from, range.to));
+    const total = rows.reduce((sum, row) => sum + row.expectedCount, 0);
+    const pages = rows.reduce((sum, row) => sum + row.pages, 0);
+    printRows(rows.map((row) => ({
+      user: row.userKey,
+      month: monthLabel(row),
+      expectedCount: row.expectedCount,
+      pages: row.pages,
+      ok: row.ok,
+      status: row.status,
+    })));
+    summaries.push({
       user: user.key,
       from: monthLabel(range.from),
       to: monthLabel(range.to),
       months: rows.length,
       expectedCount: total,
       pages,
-    },
-  }));
+    });
+  }
+  console.log(JSON.stringify({ summary: summaries.length === 1 ? summaries[0] : summaries }));
 }
 
 async function backfill(args: Args) {
-  const user = resolveHistoryUser(readString(args, "user", "leo"));
+  const users = resolveHistoryUsers(readString(args, "user", "leo"));
   const range = resolveRange(args);
   await historyStore.ensureReady();
-  const results = await backupHistoryRange(user, listHistoryMonths(range.from, range.to));
-  printRows(results.map((result) => ({
-    user: result.userKey,
-    month: monthLabel(result),
-    expectedCount: result.expectedCount,
-    fetchedCount: result.fetchedCount,
-    storedCount: result.storedCount,
-    skippedCount: result.skippedCount,
-    status: result.status,
-    errors: result.errors,
-  })));
+  for (const user of users) {
+    const results = await backupHistoryRange(user, listHistoryMonths(range.from, range.to));
+    printRows(results.map((result) => ({
+      user: result.userKey,
+      month: monthLabel(result),
+      expectedCount: result.expectedCount,
+      fetchedCount: result.fetchedCount,
+      storedCount: result.storedCount,
+      skippedCount: result.skippedCount,
+      status: result.status,
+      errors: result.errors,
+    })));
+  }
 }
 
 async function backupPreviousMonth(args: Args) {
-  const user = resolveHistoryUser(readString(args, "user", "leo"));
+  const users = resolveHistoryUsers(readString(args, "user", "leo"));
   const month = previousClosedHistoryMonth();
   await historyStore.ensureReady();
-  const result = await backupHistoryMonth(user, month);
-  printRows([{
-    user: result.userKey,
-    month: monthLabel(result),
-    expectedCount: result.expectedCount,
-    fetchedCount: result.fetchedCount,
-    storedCount: result.storedCount,
-    skippedCount: result.skippedCount,
-    status: result.status,
-    errors: result.errors,
-  }]);
+  for (const user of users) {
+    const result = await backupHistoryMonth(user, month);
+    printRows([{
+      user: result.userKey,
+      month: monthLabel(result),
+      expectedCount: result.expectedCount,
+      fetchedCount: result.fetchedCount,
+      storedCount: result.storedCount,
+      skippedCount: result.skippedCount,
+      status: result.status,
+      errors: result.errors,
+    }]);
+  }
 }
 
 async function reconcile(args: Args) {
-  const user = resolveHistoryUser(readString(args, "user", "leo"));
+  const users = resolveHistoryUsers(readString(args, "user", "leo"));
   const monthArg = readString(args, "month");
   if (!monthArg) throw new Error("--month=YYYY-MM is required for reconcile");
   await historyStore.ensureReady();
-  const result = await backupHistoryMonth(user, parseHistoryMonth(monthArg));
-  printRows([{
-    user: result.userKey,
-    month: monthLabel(result),
-    expectedCount: result.expectedCount,
-    fetchedCount: result.fetchedCount,
-    storedCount: result.storedCount,
-    skippedCount: result.skippedCount,
-    status: result.status,
-    errors: result.errors,
-  }]);
+  for (const user of users) {
+    const result = await backupHistoryMonth(user, parseHistoryMonth(monthArg));
+    printRows([{
+      user: result.userKey,
+      month: monthLabel(result),
+      expectedCount: result.expectedCount,
+      fetchedCount: result.fetchedCount,
+      storedCount: result.storedCount,
+      skippedCount: result.skippedCount,
+      status: result.status,
+      errors: result.errors,
+    }]);
+  }
 }
 
 async function status(args: Args) {
   await historyStore.ensureReady();
   const user = readString(args, "user");
-  const rows = await historyStore.listMonths(user || undefined);
+  const userKeys = user && user !== "all"
+    ? resolveHistoryUsers(user).map((entry) => entry.key)
+    : [];
+  const rows = userKeys.length > 0
+    ? (await Promise.all(userKeys.map((userKey) => historyStore.listMonths(userKey)))).flat()
+    : await historyStore.listMonths();
   printRows(rows.map((row) => ({
     user: row.userKey,
     month: monthLabel(row),
@@ -155,8 +168,9 @@ const commands: Record<string, (args: Args) => Promise<void>> = {
 if (!commands[command]) {
   console.log("Usage:");
   console.log("  tsx scripts/history.ts estimate --user=leo --from=2016-01 --to=2026-05");
-  console.log("  tsx scripts/history.ts backfill --user=leo --from=2024-01 --to=2024-12");
-  console.log("  tsx scripts/history.ts backup-previous-month --user=leo");
+  console.log("  tsx scripts/history.ts estimate --user=all --from=2026-05 --to=2026-05");
+  console.log("  tsx scripts/history.ts backfill --user=leo,gab --from=2024-01 --to=2024-12");
+  console.log("  tsx scripts/history.ts backup-previous-month --user=all");
   console.log("  tsx scripts/history.ts reconcile --user=leo --month=2024-09");
   console.log("  tsx scripts/history.ts status --user=leo");
   process.exit(command === "help" ? 0 : 1);

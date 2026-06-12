@@ -23,8 +23,9 @@ avulso como substituto do comando suportado pelo repo.
   timeout e retry.
 - `lib/user-stats-service.ts`: stats e intervalos temporais.
 - `lib/user-streams-service.ts`: recentes e historicos.
-- `lib/history-backup.ts` e `lib/history-store.ts`: backup de meses
-  fechados do historico em Postgres/Neon.
+- `lib/history-backup.ts`, `lib/history-store.ts` e `lib/history-local.ts`:
+  backup de meses fechados do historico em Postgres/Neon e leitura local
+  interna para ranges totalmente cobertos.
 - `lib/user-tops-service.ts`: tops normalizados.
 - `lib/track-album-enrichment.ts`: resolucao de album por evidencia do
   historico do usuario.
