@@ -654,6 +654,135 @@ test("lyrics match treats dash and parenthetical title versions as equivalent", 
   ]);
 });
 
+test("lyrics match tolerates extra app artist credits missing from Genius", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+  const queries: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q") || "");
+
+    if (url.pathname.includes("/songs/24680")) {
+      return jsonResponse({ meta: { status: 200 }, response: { song: { writer_artists: [] } } });
+    }
+
+    if (url.hostname === "genius.com") {
+      return new Response("blocked", { status: 403 });
+    }
+
+    return jsonResponse({
+      meta: { status: 200 },
+      response: {
+        hits: [
+          {
+            result: {
+              id: 24680,
+              title: "Chapadinha na Gaveta",
+              full_title: "Chapadinha na Gaveta by Machadez, Gabily & Vanessa Lopes",
+              url: "https://genius.com/Machadez-gabily-and-vanessa-lopes-chapadinha-na-gaveta-lyrics",
+              path: "/Machadez-gabily-and-vanessa-lopes-chapadinha-na-gaveta-lyrics",
+              lyrics_state: "complete",
+              primary_artist: { name: "Machadez" },
+            },
+          },
+        ],
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: {
+      title: "Chapadinha na Gaveta",
+      artist: "Gabily, Machadez, Mousik & Vanessa Lopes",
+      includeLyrics: "1",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.id, 24680);
+  assert.equal(captured.body.match.artist, "Machadez");
+  assert.equal(captured.body.lyrics, null);
+  assert.equal(captured.body.reason, "lyrics_upstream_403");
+  assert.equal(queries[0], "Chapadinha na Gaveta Gabily, Machadez, Mousik & Vanessa Lopes");
+});
+
+test("lyrics match accepts exact complete title without perfect artist match", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+  const queries: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q") || "");
+    return jsonResponse({
+      meta: { status: 200 },
+      response: {
+        hits: [
+          {
+            result: {
+              id: 24681,
+              title: "Chapadinha na Gaveta",
+              full_title: "Chapadinha na Gaveta by Machadez, Gabily & Vanessa Lopes",
+              url: "https://genius.com/Machadez-gabily-and-vanessa-lopes-chapadinha-na-gaveta-lyrics",
+              path: "/Machadez-gabily-and-vanessa-lopes-chapadinha-na-gaveta-lyrics",
+              lyrics_state: "complete",
+              primary_artist: { name: "Machadez" },
+            },
+          },
+        ],
+      },
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "Chapadinha na Gaveta", artist: "Mousik" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, true);
+  assert.equal(captured.body.match.id, 24681);
+  assert.equal(captured.body.match.confidence, "medium");
+  assert.equal(queries[0], "Chapadinha na Gaveta Mousik");
+});
+
+test("lyrics match keeps similar titles below confidence threshold", async () => {
+  process.env.GENIUS_ACCESS_TOKEN = "test-token";
+
+  globalThis.fetch = async () => jsonResponse({
+    meta: { status: 200 },
+    response: {
+      hits: [
+        {
+          result: {
+            id: 24682,
+            title: "Chapadinha no Bolso",
+            full_title: "Chapadinha no Bolso by Machadez",
+            url: "https://genius.com/Machadez-chapadinha-no-bolso-lyrics",
+            path: "/Machadez-chapadinha-no-bolso-lyrics",
+            lyrics_state: "complete",
+            primary_artist: { name: "Machadez" },
+          },
+        },
+      ],
+    },
+  });
+
+  const { res, captured } = createResponseCapture();
+
+  await lyricsHandler({
+    query: { title: "Chapadinha na Gaveta", artist: "Machadez" },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.body.hasLyrics, false);
+  assert.equal(captured.body.reason, "no_confident_match");
+  assert.equal(captured.body.match, null);
+});
+
 test("reference-shaped fixtures preserve labels and fields in normalizers", () => {
   const track = normalizeTrack(referenceFixtures.track);
   const artist = normalizeArtist(referenceFixtures.artist);

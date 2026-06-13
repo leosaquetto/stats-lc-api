@@ -94,16 +94,111 @@ function includesText(value: string, candidate: string) {
   return Boolean(value && candidate && (value.includes(candidate) || candidate.includes(value)));
 }
 
-function scoreHit(hit: any, title: string, artist: string | null) {
-  const result = hit?.result ?? hit;
+function tokenizeCanonical(value: string) {
+  return value.split(/\s+/).filter(Boolean);
+}
+
+function splitArtistVariants(artist: string | null) {
+  const variants: string[] = [];
+  const addVariant = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (!variants.some((existing) => canonicalText(existing) === canonicalText(trimmed))) {
+      variants.push(trimmed);
+    }
+  };
+
+  addVariant(artist || "");
+  if (!artist) return variants;
+
+  const normalized = artist.replace(/\s+(?:feat|ft|with)\.?\s+/gi, ",");
+  const parts = normalized
+    .split(/\s*(?:,|&|\band\b|;|\+)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  addVariant(parts[0] || "");
+  for (const part of parts) addVariant(part);
+  return variants;
+}
+
+function pathText(value: unknown) {
+  return typeof value === "string"
+    ? canonicalText(value.replace(/^\//, "").replace(/-lyrics(?:-\d+)?$/i, "").replace(/-/g, " "))
+    : "";
+}
+
+function hasExactTitleMatch(result: any, title: string) {
   const titleNeedle = canonicalTitleText(title);
   const comparableTitleNeedle = canonicalTitleComparable(title);
-  const artistNeedle = canonicalText(artist);
+  const resultTitle = canonicalText(result?.title);
+  const comparableResultTitle = canonicalTitleComparable(result?.title);
+  return Boolean(
+    titleNeedle &&
+    (
+      resultTitle === titleNeedle ||
+      comparableResultTitle === comparableTitleNeedle
+    )
+  );
+}
+
+function hasSafeTitleMatch(result: any, title: string) {
+  const titleNeedle = canonicalTitleText(title);
+  const comparableTitleNeedle = canonicalTitleComparable(title);
   const resultTitle = canonicalText(result?.title);
   const resultFullTitle = canonicalText(result?.full_title);
   const comparableResultTitle = canonicalTitleComparable(result?.title);
   const comparableResultFullTitle = canonicalTitleComparable(result?.full_title);
+
+  return Boolean(
+    titleNeedle &&
+    (
+      resultTitle === titleNeedle ||
+      comparableResultTitle === comparableTitleNeedle ||
+      includesText(comparableResultTitle, comparableTitleNeedle) ||
+      includesText(comparableResultFullTitle, comparableTitleNeedle) ||
+      includesText(resultTitle, titleNeedle) ||
+      includesText(resultFullTitle, titleNeedle)
+    )
+  );
+}
+
+function scoreArtistMatch(result: any, artist: string | null) {
+  const artistNeedle = canonicalText(artist);
   const resultArtist = canonicalText(result?.primary_artist?.name);
+  const resultFullTitle = canonicalText(result?.full_title);
+  const resultPath = pathText(result?.path ?? result?.url);
+  const artistVariants = splitArtistVariants(artist);
+  const artistTokens = artistVariants.flatMap((variant) => tokenizeCanonical(canonicalText(variant)));
+
+  if (artistNeedle && resultArtist === artistNeedle) return 0.35;
+  if (includesText(resultArtist, artistNeedle)) return 0.24;
+  if (artistNeedle && includesText(resultFullTitle, artistNeedle)) return 0.18;
+
+  const matchedVariant = artistVariants.find((variant) => {
+    const canonical = canonicalText(variant);
+    return canonical && (
+      resultArtist === canonical ||
+      includesText(resultArtist, canonical) ||
+      includesText(resultFullTitle, canonical) ||
+      includesText(resultPath, canonical)
+    );
+  });
+  if (matchedVariant) return 0.24;
+
+  const resultArtistTokens = new Set(tokenizeCanonical(`${resultArtist} ${resultFullTitle} ${resultPath}`));
+  const matchedTokens = artistTokens.filter((token) => token.length > 2 && resultArtistTokens.has(token));
+  return matchedTokens.length > 0 ? 0.12 : 0;
+}
+
+function scoreHit(hit: any, title: string, artist: string | null) {
+  const result = hit?.result ?? hit;
+  const titleNeedle = canonicalTitleText(title);
+  const comparableTitleNeedle = canonicalTitleComparable(title);
+  const resultTitle = canonicalText(result?.title);
+  const resultFullTitle = canonicalText(result?.full_title);
+  const comparableResultTitle = canonicalTitleComparable(result?.title);
+  const comparableResultFullTitle = canonicalTitleComparable(result?.full_title);
 
   let score = 0;
   if (comparableTitleNeedle && comparableResultTitle === comparableTitleNeedle) score += 0.6;
@@ -113,11 +208,18 @@ function scoreHit(hit: any, title: string, artist: string | null) {
   else if (includesText(resultTitle, titleNeedle)) score += 0.42;
   else if (includesText(resultFullTitle, titleNeedle)) score += 0.34;
 
-  if (artistNeedle && resultArtist === artistNeedle) score += 0.35;
-  else if (includesText(resultArtist, artistNeedle)) score += 0.24;
-  else if (artistNeedle && includesText(resultFullTitle, artistNeedle)) score += 0.18;
+  score += scoreArtistMatch(result, artist);
 
   if (result?.lyrics_state === "complete") score += 0.05;
+
+  if (
+    score < 0.72 &&
+    hasExactTitleMatch(result, title) &&
+    result?.lyrics_state === "complete" &&
+    scoreArtistMatch(result, artist) > 0
+  ) {
+    score = 0.74;
+  }
 
   return Math.min(1, score);
 }
@@ -142,6 +244,51 @@ function searchTitleVariants(title: string) {
   addVariant(stripLyricsSearchSuffix(title));
 
   return variants;
+}
+
+function searchQueryVariants(title: string, artist: string | null) {
+  const variants: string[] = [];
+  const addVariant = (searchTitle: string, searchArtist: string | null) => {
+    const query = [searchTitle, searchArtist].filter(Boolean).join(" ").trim();
+    if (!query) return;
+    if (!variants.some((existing) => existing.toLowerCase() === query.toLowerCase())) {
+      variants.push(query);
+    }
+  };
+
+  const titleVariants = searchTitleVariants(title);
+  const artistVariants = splitArtistVariants(artist);
+  const [originalArtist, ...fallbackArtists] = artistVariants;
+
+  for (const searchTitle of titleVariants) {
+    addVariant(searchTitle, originalArtist || null);
+  }
+
+  for (const searchTitle of titleVariants) {
+    for (const artistVariant of fallbackArtists) {
+      addVariant(searchTitle, artistVariant);
+    }
+  }
+
+  if (artistVariants.length === 0 || titleVariants.length > 0) {
+    for (const searchTitle of titleVariants) {
+      addVariant(searchTitle, null);
+    }
+  }
+
+  return variants;
+}
+
+function isConfidentWinner(winner: { hit: any; score: number } | undefined, title: string) {
+  if (!winner) return false;
+  if (winner.score >= 0.72) return hasSafeTitleMatch(winner.hit?.result ?? winner.hit, title);
+
+  const result = winner.hit?.result ?? winner.hit;
+  return Boolean(
+    winner.score >= 0.65 &&
+    hasExactTitleMatch(result, title) &&
+    result?.lyrics_state === "complete"
+  );
 }
 
 function normalizeMatch(hit: any, score: number) {
@@ -353,8 +500,8 @@ export async function findGeniusLyricsMatch(
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const search = async (searchTitle: string) => {
-      const query = buildQuery({ q: [searchTitle, normalizedArtist].filter(Boolean).join(" ") });
+    const search = async (searchQuery: string) => {
+      const query = buildQuery({ q: searchQuery });
       const response = await fetch(`${GENIUS_API_BASE}/search${query}`, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -377,18 +524,18 @@ export async function findGeniusLyricsMatch(
     let hits: any[] = [];
     let winner: { hit: any; score: number } | undefined;
 
-    for (const searchTitle of searchTitleVariants(normalizedTitle)) {
-      const nextHits = await search(searchTitle);
+    for (const searchQuery of searchQueryVariants(normalizedTitle, normalizedArtist)) {
+      const nextHits = await search(searchQuery);
       hits = [...hits, ...nextHits];
       winner = rankHits(hits)[0];
-      if (winner && winner.score >= 0.72) break;
+      if (isConfidentWinner(winner, normalizedTitle)) break;
     }
 
-    const result: GeniusLyricsMatch = winner && winner.score >= 0.72
+    const result: GeniusLyricsMatch = isConfidentWinner(winner, normalizedTitle)
       ? {
           ...baseResponse,
           hasLyrics: true,
-          match: normalizeMatch(winner.hit, winner.score),
+          match: normalizeMatch(winner!.hit, winner!.score),
         }
       : {
           ...baseResponse,
