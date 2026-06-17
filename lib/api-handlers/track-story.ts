@@ -52,6 +52,14 @@ function readTime(item: any) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function parseDateMs(value: string | null) {
+  if (!value) return 0;
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  const time = /^\d+$/.test(trimmed) ? Number(trimmed) : new Date(trimmed).getTime();
+  return Number.isFinite(time) && time > 0 ? time : 0;
+}
+
 function saoPauloParts(value: number) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
@@ -255,20 +263,85 @@ async function getFirstListeners(trackId: string, counts: CountRow[], deadline: 
   return { listeners, partial };
 }
 
-function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
+function getWrappedPeriods(
+  years: Map<number, number>,
+  months: Map<string, number>,
+  releaseKey: string,
+) {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const releaseYear = releaseKey ? Number(releaseKey.slice(0, 4)) : 0;
+  const useMonths = releaseYear === currentYear;
+
+  if (useMonths) {
+    const currentMonthStart = new Date(currentYear, now.getMonth(), 1);
+    const recentKeys = Array.from({ length: 3 }, (_, index) => {
+      const date = new Date(currentMonthStart);
+      date.setMonth(currentMonthStart.getMonth() - (2 - index));
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    });
+    const recentSet = new Set(recentKeys);
+    const bestEntry = [...months.entries()].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0];
+    const displayKeys = bestEntry && !recentSet.has(bestEntry[0])
+      ? [bestEntry[0], recentKeys[1], recentKeys[2]]
+      : recentKeys;
+    const bestCount = Math.max(...displayKeys.map((key) => months.get(key) || 0), 0);
+
+    return {
+      mode: "month" as const,
+      periods: displayKeys.map((key) => {
+        const [year, month] = key.split("-").map(Number);
+        return {
+          key,
+          year,
+          month,
+          label: new Intl.DateTimeFormat("pt-BR", {
+            timeZone: "UTC",
+            month: "short",
+            year: "2-digit",
+          }).format(new Date(Date.UTC(year || currentYear, (month || 1) - 1, 1))).replace(".", ""),
+          count: months.get(key) || 0,
+          highlight: bestCount > 0 && (months.get(key) || 0) === bestCount,
+        };
+      }),
+    };
+  }
+
+  const recentYears = [currentYear - 2, currentYear - 1, currentYear];
+  const recentSet = new Set(recentYears);
+  const bestEntry = [...years.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
+  const displayYears = bestEntry && !recentSet.has(bestEntry[0])
+    ? [bestEntry[0], currentYear - 1, currentYear]
+    : recentYears;
+  const bestCount = Math.max(...displayYears.map((year) => years.get(year) || 0), 0);
+
+  return {
+    mode: "year" as const,
+    periods: displayYears.map((year) => ({
+      key: String(year),
+      year,
+      label: String(year),
+      count: years.get(year) || 0,
+      highlight: bestCount > 0 && (years.get(year) || 0) === bestCount,
+    })),
+  };
+}
+
+function summarizeHistory(items: any[], totalCount: number, complete: boolean, releaseKey: string, currentPlayedAt = 0) {
   const times = items
     .map(readTime)
     .filter((time) => time > 0)
     .sort((a, b) => a - b);
   const years = new Map<number, number>();
-  const months = new Map<number, number>();
+  const months = new Map<string, number>();
   const days = new Map<string, number>();
   const hours = new Map<number, number>();
 
   for (const time of times) {
     const parts = saoPauloParts(time);
     years.set(parts.year, (years.get(parts.year) || 0) + 1);
-    months.set(parts.month, (months.get(parts.month) || 0) + 1);
+    const monthKey = `${parts.year}-${String(parts.month).padStart(2, "0")}`;
+    months.set(monthKey, (months.get(monthKey) || 0) + 1);
     days.set(parts.dayKey, (days.get(parts.dayKey) || 0) + 1);
     hours.set(parts.hour, (hours.get(parts.hour) || 0) + 1);
   }
@@ -315,6 +388,11 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
   const bestDaypart = dayparts.sort((a, b) => b.count - a.count)[0] || null;
   const firstPlayedAt = times[0] || 0;
   const lastPlayedAt = times[times.length - 1] || 0;
+  const previousPlayedAt = currentPlayedAt > 0
+    ? [...times].reverse().find((time) => time < currentPlayedAt - 90_000) || 0
+    : times.length > 1
+      ? times[times.length - 2]
+      : 0;
   let maxGapDays = 0;
   let maxGapStart: number | null = null;
   let maxGapEnd: number | null = null;
@@ -329,15 +407,19 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
   }
 
   const playedCount = totalCount || times.length;
-  const monthKeys = [...months.keys()].filter((month) => month > 0);
+  const monthKeys = [...months.keys()].filter(Boolean);
+  const monthNumbers = new Set(monthKeys.map((key) => Number(key.slice(5, 7))).filter((month) => month > 0));
   const playedYears = new Set([...years.keys()].filter((year) => year > 0));
-  const hasRecurringSeasonalMonth = playedCount >= 3 && monthKeys.length === 1 && playedYears.size >= 2;
+  const recurringSeasonalMonth = monthNumbers.size === 1 ? [...monthNumbers][0] : null;
+  const hasRecurringSeasonalMonth = playedCount >= 3 && recurringSeasonalMonth != null && playedYears.size >= 2;
 
   return {
     count: playedCount,
     firstPlayedAt: firstPlayedAt ? new Date(firstPlayedAt).toISOString() : null,
     lastPlayedAt: lastPlayedAt ? new Date(lastPlayedAt).toISOString() : null,
+    previousPlayedAt: previousPlayedAt ? new Date(previousPlayedAt).toISOString() : null,
     bestYear,
+    wrapped: getWrappedPeriods(years, months, releaseKey),
     advanced: complete && playedCount > 10
       ? {
           streak,
@@ -355,7 +437,7 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean) {
         }
       : null,
     specialSignals: {
-      seasonalMonth: hasRecurringSeasonalMonth ? monthKeys[0] : null,
+      seasonalMonth: hasRecurringSeasonalMonth ? recurringSeasonalMonth : null,
       maxGapDays,
       maxGapStart: maxGapStart ? new Date(maxGapStart).toISOString() : null,
       maxGapEnd: maxGapEnd ? new Date(maxGapEnd).toISOString() : null,
@@ -390,6 +472,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const albumId = readOptionalQueryString(req.query.album);
   const artistIds = splitCsv(readOptionalQueryString(req.query.artists)).slice(0, 5);
   const releaseKey = releaseDayKey(readOptionalQueryString(req.query.releaseDate));
+  const currentPlayedAt = parseDateMs(readOptionalQueryString(req.query.currentPlayedAt));
 
   if (!user || !trackId) {
     return res.status(400).json({ ok: false, error: "missing_user_or_track" });
@@ -425,7 +508,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ...ownTrackStats,
     count: ownTrackCount,
   };
-  const history = summarizeHistory(ownHistory.items, ownTrackCount ?? ownHistory.items.length, historyComplete);
+  const history = summarizeHistory(ownHistory.items, ownTrackCount ?? ownHistory.items.length, historyComplete, releaseKey, currentPlayedAt);
 
   const [albumCount, artistCounts, friendTrackCounts] = await Promise.all([
     albumCountPromise,
@@ -537,7 +620,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       count: ownTrackCount ?? history.count,
       firstPlayedAt: historyComplete ? history.firstPlayedAt : null,
       lastPlayedAt: historyComplete ? history.lastPlayedAt : null,
+      previousPlayedAt: historyComplete ? history.previousPlayedAt : null,
       bestYear: historyComplete ? history.bestYear : null,
+      wrapped: historyComplete ? history.wrapped : null,
     },
     advanced: historyComplete ? history.advanced : null,
     social: {

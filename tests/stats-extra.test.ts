@@ -902,6 +902,7 @@ test("track-story returns advanced history, social ranking, and special cards", 
       album: "album-1",
       artists: "artist-1",
       releaseDate: "2024-06-02T00:00:00.000Z",
+      currentPlayedAt: "2026-06-12T12:00:00.000Z",
     },
   } as any, res);
 
@@ -909,8 +910,17 @@ test("track-story returns advanced history, social ranking, and special cards", 
   assert.equal(captured.body.ok, true);
   assert.equal(captured.body.counts.track, 12);
   assert.equal(captured.body.counts.album, 4);
+  assert.equal(captured.body.history.previousPlayedAt, "2026-06-11T12:00:00.000Z");
   assert.equal(captured.body.history.bestYear.year, 2026);
   assert.equal(captured.body.history.bestYear.previousYearCount, 0);
+  assert.deepEqual(captured.body.history.wrapped, {
+    mode: "year",
+    periods: [
+      { key: "2024", year: 2024, label: "2024", count: 1, highlight: false },
+      { key: "2025", year: 2025, label: "2025", count: 0, highlight: false },
+      { key: "2026", year: 2026, label: "2026", count: 11, highlight: true },
+    ],
+  });
   assert.equal(captured.body.advanced.top1kPosition, 9);
   assert.equal(captured.body.social.cakePiecePercent, 100);
   assert.equal(captured.body.social.heardOnRelease, true);
@@ -993,12 +1003,15 @@ test("track-story does not mark a one-year month cluster as seasonal", async () 
       track: "one-year-month",
       album: "album-1",
       artists: "artist-1",
+      releaseDate: "2026-07-01T00:00:00.000Z",
     },
   } as any, res);
 
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.coverage.partial, false);
   assert.equal(captured.body.counts.track, 4);
+  assert.equal(captured.body.history.wrapped.mode, "month");
+  assert.equal(captured.body.history.wrapped.periods.length, 3);
   assert.equal(captured.body.specialCards.some((card: any) => card.code === "seasonal"), false);
 });
 
