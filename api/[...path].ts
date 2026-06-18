@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import albumTracksHandler from "../lib/api-handlers/album-tracks.js";
 import artistCatalogHandler from "../lib/api-handlers/artist-catalog.js";
+import catalogLinkBridgeHandler from "../lib/api-handlers/catalog-link-bridge.js";
 import compareHandler from "../lib/api-handlers/compare.js";
 import entityGroupStatsHandler from "../lib/api-handlers/entity-group-stats.js";
 import entityListenersHandler from "../lib/api-handlers/entity-listeners.js";
@@ -36,6 +37,7 @@ type Handler = (req: VercelRequest, res: VercelResponse) => unknown;
 const ROUTES: Record<string, Handler> = {
   "album-tracks": albumTracksHandler,
   "artist-catalog": artistCatalogHandler,
+  "catalog-link-bridge": catalogLinkBridgeHandler,
   compare: compareHandler,
   "entity-group-stats": entityGroupStatsHandler,
   "entity-listeners": entityListenersHandler,

@@ -25,6 +25,7 @@ Represents **catalog availability** for the track.
 `externalIds` are used for catalog/discovery mapping only.
 
 - `externalIds` **must not** be used alone to infer playback source/platform origin.
+- `/api/catalog-link-bridge` may use `externalIds.spotify` and `externalIds.appleMusic` to enrich cross-platform catalog links for trusted backend callers, but still must not infer where a user listened from.
 
 Album selection for user-scoped track payloads has its own durable rule in [`docs/track-album-resolution.md`](./track-album-resolution.md). In short: user stream album evidence wins over public track catalog metadata.
 
@@ -113,6 +114,7 @@ After changing `GENIUS_ACCESS_TOKEN` in Vercel, redeploy the API so serverless f
 | `/api/track-story` | `user=<user>`, `track=<track id>`, optional `album=<album id>`, `artists=<csv artist ids>`, `releaseDate=<date or epoch ms>`, `currentPlayedAt=<date or epoch ms>` | Progressive Bottom Track Stats story payload for one user/track. | `counts`, `history.previousPlayedAt`, `history.bestYear.{year,count,previousYearCount,nextYearCount}`, `history.wrapped` with 3 year/month periods, advanced metrics for tracks with more than 10 plays, `social`, and ordered `specialCards` (`shiny`, `hiddenGem`, `special`, `late`, `seasonal`). `social.releaseListeners` uses the catalog release day plus the previous UTC day as the release window, so release-eve plays count. A `late` card exposes `value.{previousPlayedAt,returnedAt,gapDays}`. `seasonal` requires 3+ plays all in the same calendar month and that month recurring across at least two distinct years. Unproven counts are `null`, never false zeroes. Complete proof is cached for 5 minutes; partial proof is `no-store`. It never uses `force=1`. |
 | `/api/album-tracks` | `id=<album id>`, optional `force=1` | Album track list. | Normalized track `items`. |
 | `/api/artist-catalog` | `id=<artist id>`, `section=tracks|top-tracks|albums|top-albums|related`, optional `limit`, `offset`, `force=1` | Artist page catalog sections. | Normalized tracks, albums, or related artists depending on `section`. |
+| `/api/catalog-link-bridge` | Trusted backend only. `q`, `title`, `artist`, optional `durationMs`, `spotifyId`, `appleMusicId`, `statsfmTrackId`, `isrc`, optional `force=1`. | Internal catalog bridge for link conversion products. | Returns `matched`, `score`, normalized `track`, and direct catalog `links` for Spotify/Apple Music when stats.fm external IDs support a confident match. If `CATALOG_LINK_BRIDGE_TOKEN` is set, callers must send `Authorization: Bearer <token>`. |
 
 ### Discovery and comparison endpoints
 

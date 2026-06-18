@@ -3,6 +3,7 @@ import test, { afterEach } from "node:test";
 import type { VercelResponse } from "@vercel/node";
 import albumTracksHandler from "../lib/api-handlers/album-tracks.ts";
 import artistCatalogHandler from "../lib/api-handlers/artist-catalog.ts";
+import catalogLinkBridgeHandler from "../lib/api-handlers/catalog-link-bridge.ts";
 import entityHandler from "../lib/api-handlers/entity.ts";
 import entityListenersHandler from "../lib/api-handlers/entity-listeners.ts";
 import entityStreamsHandler from "../lib/api-handlers/entity-streams.ts";
@@ -21,6 +22,7 @@ import { __resetStatsfmStateForTests } from "../lib/statsfm.ts";
 
 const originalFetch = globalThis.fetch;
 const originalGeniusToken = process.env.GENIUS_ACCESS_TOKEN;
+const originalBridgeToken = process.env.CATALOG_LINK_BRIDGE_TOKEN;
 
 const referenceFixtures = {
   track: {
@@ -107,6 +109,11 @@ afterEach(() => {
     delete process.env.GENIUS_ACCESS_TOKEN;
   } else {
     process.env.GENIUS_ACCESS_TOKEN = originalGeniusToken;
+  }
+  if (originalBridgeToken === undefined) {
+    delete process.env.CATALOG_LINK_BRIDGE_TOKEN;
+  } else {
+    process.env.CATALOG_LINK_BRIDGE_TOKEN = originalBridgeToken;
   }
   __resetStatsfmStateForTests();
 });
@@ -393,6 +400,91 @@ test("search proxies q/type and normalizes typed results", async () => {
   assert.equal(capturedUrl?.searchParams.get("query"), "lana");
   assert.equal(capturedUrl?.searchParams.get("type"), "artist");
   assert.deepEqual(captured.body.items[0].item.genres, ["Pop"]);
+});
+
+test("catalog link bridge returns trusted Spotify and Apple Music links from stats.fm external IDs", async () => {
+  process.env.CATALOG_LINK_BRIDGE_TOKEN = "bridge-test-token";
+  let capturedUrl: URL | null = null;
+
+  globalThis.fetch = async (input: string | URL | Request) => {
+    capturedUrl = new URL(String(input));
+    return jsonResponse({
+      items: [
+        {
+          type: "track",
+          item: {
+            albums: [{ id: 165784, image: "https://img.test/album.jpg", name: "Norman Fucking Rockwell!" }],
+            artists: [{ id: 12886, name: "Lana Del Rey" }],
+            durationMs: 577199,
+            externalIds: {
+              spotify: ["3hwQhakFwm9soLEBnSDH17"],
+              appleMusic: ["1474669067"],
+            },
+            id: 1592143,
+            name: "Venice Bitch",
+          },
+        },
+      ],
+    });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await catalogLinkBridgeHandler({
+    method: "GET",
+    headers: { authorization: "Bearer bridge-test-token" },
+    query: {
+      q: "Lana Del Rey Venice Bitch",
+      title: "Venice Bitch",
+      artist: "Lana Del Rey",
+      spotifyId: "3hwQhakFwm9soLEBnSDH17",
+      durationMs: "577199",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(capturedUrl?.pathname, "/api/v1/search");
+  assert.equal(captured.body.matched, true);
+  assert.equal(captured.body.score, 100);
+  assert.deepEqual(
+    captured.body.links.map((link: any) => ({ type: link.type, id: link.id, source: link.source })),
+    [
+      { type: "spotify", id: "3hwQhakFwm9soLEBnSDH17", source: "statslc_bridge" },
+      { type: "appleMusic", id: "1474669067", source: "statslc_bridge" },
+    ]
+  );
+});
+
+test("catalog link bridge trusts a direct stats.fm track id when external links exist", async () => {
+  process.env.CATALOG_LINK_BRIDGE_TOKEN = "bridge-test-token";
+  let capturedUrl: URL | null = null;
+
+  globalThis.fetch = async (input: string | URL | Request) => {
+    capturedUrl = new URL(String(input));
+    return jsonResponse({ item: referenceFixtures.track });
+  };
+
+  const { res, captured } = createResponseCapture();
+
+  await catalogLinkBridgeHandler({
+    method: "GET",
+    headers: { authorization: "Bearer bridge-test-token" },
+    query: {
+      statsfmTrackId: "1592143",
+    },
+  } as any, res);
+
+  assert.equal(captured.statusCode, 200);
+  assert.equal(capturedUrl?.pathname, "/api/v1/tracks/1592143");
+  assert.equal(captured.body.matched, true);
+  assert.equal(captured.body.score, 98);
+  assert.deepEqual(
+    captured.body.links.map((link: any) => ({ type: link.type, id: link.id, source: link.source })),
+    [
+      { type: "spotify", id: "3hwQhakFwm9soLEBnSDH17", source: "statslc_bridge" },
+      { type: "appleMusic", id: "1474669067", source: "statslc_bridge" },
+    ]
+  );
 });
 
 test("lyrics can scrape modern Genius lyrics containers when requested", async () => {
