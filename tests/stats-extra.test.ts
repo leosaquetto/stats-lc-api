@@ -924,6 +924,10 @@ test("track-story returns advanced history, social ranking, and special cards", 
   assert.equal(captured.body.advanced.top1kPosition, 9);
   assert.equal(captured.body.social.cakePiecePercent, 100);
   assert.equal(captured.body.social.heardOnRelease, true);
+  assert.deepEqual(
+    captured.body.social.releaseListeners.map((listener: any) => listener.id),
+    [ownUserId]
+  );
   assert.equal(captured.body.coverage.partial, false);
   assert.deepEqual(captured.body.coverage.counts, {
     track: true,
