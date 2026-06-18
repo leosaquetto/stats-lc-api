@@ -19,6 +19,9 @@ avulso como substituto do comando suportado pelo repo.
 
 - `api/[...path].ts`: dispatcher central, CORS, request ID, timing e logs.
 - `lib/api-handlers/`: contratos HTTP por rota.
+- `lib/api-handlers/catalog-link-bridge.ts`: bridge interno e protegido para
+  produtos confiaveis enriquecerem links Spotify/Apple Music a partir do
+  catalogo stats.fm.
 - `lib/statsfm.ts`: unica entrada upstream, cache, stale, dedupe, cooldown,
   timeout e retry.
 - `lib/user-stats-service.ts`: stats e intervalos temporais.
@@ -49,6 +52,9 @@ avulso como substituto do comando suportado pelo repo.
 - Nao adicionar Redis/KV, persistencia pesada ou `/api/home-bundle` sem pedido
   explicito.
 - Nao inferir origem de playback apenas por `externalIds`.
+- `/api/catalog-link-bridge` pode usar `externalIds.spotify` e
+  `externalIds.appleMusic` apenas para enriquecimento de catalogo/link, e deve
+  ser protegido por `CATALOG_LINK_BRIDGE_TOKEN` em producao.
 - Cor dominante e enriquecimentos opcionais nao devem bloquear live/Home.
 - Respostas parciais devem preservar o shape publico e expor warnings
   especificos.
