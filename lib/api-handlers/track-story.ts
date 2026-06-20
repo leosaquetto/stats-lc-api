@@ -434,6 +434,7 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean, r
             : null,
           daysSinceFirst: firstPlayedAt ? Math.max(0, Math.floor((Date.now() - firstPlayedAt) / DAY_MS)) : null,
           top1kPosition: null as number | null,
+          topYearPosition: null as number | null,
         }
       : null,
     specialSignals: {
@@ -445,9 +446,9 @@ function summarizeHistory(items: any[], totalCount: number, complete: boolean, r
   };
 }
 
-async function getTop1kPosition(userId: string, trackId: string, deadline: number) {
+async function getTopTrackPosition(userId: string, trackId: string, after: number, limit: number, deadline: number) {
   if (Date.now() >= deadline) return { position: null as number | null, partial: true };
-  const result = await fetchUserTop(userId, "tracks", 0, 1000, {
+  const result = await fetchUserTop(userId, "tracks", after, limit, {
     force: false,
     cacheProfile: "heavy",
     requestTimeoutMs: clampTimeout(deadline, 500, 1600),
@@ -460,6 +461,16 @@ async function getTop1kPosition(userId: string, trackId: string, deadline: numbe
     return id === trackId || String(item?.trackId || "") === trackId;
   }) as any;
   return { position: match ? Number(match.position || items.indexOf(match) + 1) : null, partial: false };
+}
+
+async function getTop1kPosition(userId: string, trackId: string, deadline: number) {
+  return getTopTrackPosition(userId, trackId, 0, 1000, deadline);
+}
+
+async function getTopYearPosition(userId: string, trackId: string, deadline: number) {
+  const now = new Date();
+  const currentYearStart = new Date(now.getFullYear(), 0, 1).getTime();
+  return getTopTrackPosition(userId, trackId, currentYearStart, 100, deadline);
 }
 
 function makeSpecialCard(code: TrackStorySpecialCode, label: string, tone: TrackStorySpecialTone, detail: string, value?: unknown) {
@@ -496,6 +507,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
   const friendTrackCountsPromise = getEntityStatsForGroup("track", trackId, deadline, friendUsers);
   const top1kPromise = getTop1kPosition(userId, trackId, deadline);
+  const topYearPromise = getTopYearPosition(userId, trackId, deadline);
 
   const [ownTrackStats, ownHistory] = await Promise.all([ownTrackCountPromise, ownHistoryPromise]);
   const historyComplete = !ownHistory.partial;
@@ -532,9 +544,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let topPartial = false;
   if (history.advanced) {
-    const top1k = await top1kPromise;
+    const [top1k, topYear] = await Promise.all([top1kPromise, topYearPromise]);
     history.advanced.top1kPosition = top1k.position;
-    topPartial = top1k.partial;
+    history.advanced.topYearPosition = topYear.position;
+    topPartial = top1k.partial || topYear.partial;
   }
 
   const releaseListeners = releaseKey

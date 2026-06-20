@@ -922,6 +922,7 @@ test("track-story returns advanced history, social ranking, and special cards", 
     ],
   });
   assert.equal(captured.body.advanced.top1kPosition, 9);
+  assert.equal(captured.body.advanced.topYearPosition, 9);
   assert.equal(captured.body.social.cakePiecePercent, 100);
   assert.equal(captured.body.social.heardOnRelease, true);
   assert.deepEqual(
